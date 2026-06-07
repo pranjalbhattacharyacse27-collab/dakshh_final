@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Swiss Tournament Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background-color: #030712;
+            background-image: 
+                radial-gradient(circle at 15% 20%, rgba(16, 185, 129, 0.12), transparent 30%),
+                radial-gradient(circle at 85% 60%, rgba(59, 130, 246, 0.12), transparent 30%),
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 30px 30px, 30px 30px;
+            background-attachment: fixed;
+        }
+        
+        .glass-panel { @apply bg-slate-900/80 backdrop-blur-md border border-slate-700/60 shadow-xl; }
+        .qualified { @apply bg-emerald-900/40 border-emerald-500/50 text-emerald-100; }
+        .eliminated { @apply bg-red-900/40 border-red-500/50 text-red-200 opacity-60; }
+        .league-team { @apply bg-blue-900/40 border-blue-500/50 text-blue-100; }
+        
+        .swing-team-row { @apply bg-amber-950/50 border-amber-600/50 text-amber-100; }
+        .swing-tag { @apply bg-amber-500 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded ml-2 uppercase tracking-widest; }
+        
+        #visualizerContainer { overflow-x: auto; overflow-y: visible; padding-bottom: 80px; position: relative; }
+        .viz-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+        .viz-scroll::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 8px; }
+        .viz-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 8px; border: 2px solid rgba(15, 23, 42, 0.8); }
+        .viz-scroll::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        @keyframes fadeInLine { from { opacity: 0; } to { opacity: 0.35; } }
+        .flow-line-win { stroke: #22c55e; stroke-width: 2.5; stroke-dasharray: 6 6; animation: fadeInLine 0.5s ease-out forwards, flowWin 1s linear infinite; }
+        .flow-line-loss { stroke: #ef4444; stroke-width: 2.5; stroke-dasharray: 6 6; animation: fadeInLine 0.5s ease-out forwards, flowLoss 1s linear infinite; }
+        @keyframes flowWin { to { stroke-dashoffset: -12; } }
+        @keyframes flowLoss { to { stroke-dashoffset: -12; } }
+        @keyframes riseUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .podium-step { animation: riseUp 0.8s ease-out forwards; }
+        @keyframes fadeInFast { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fadeIn { animation: fadeInFast 0.2s ease-out forwards; }
+        @keyframes pulseDot { 0% { opacity: 0.4; } 50% { opacity: 1; box-shadow: 0 0 10px #ef4444; } 100% { opacity: 0.4; } }
+        .live-dot { animation: pulseDot 1.5s infinite; }
+
+        .map-tooltip {
+            position: absolute; bottom: 110%; left: 50%; transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.98); backdrop-filter: blur(12px); 
+            border: 1px solid #475569; border-radius: 8px; padding: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.8), 0 0 15px rgba(16, 185, 129, 0.2);
+            z-index: 9999; width: max-content; min-width: 180px; 
+            opacity: 0; visibility: hidden; transition: all 0.2s ease-out; pointer-events: none;
+        }
+        .map-tooltip.tooltip-right { left: 0; transform: none; }
+        .map-tooltip.tooltip-left { left: auto; right: 0; transform: none; }
+        .group:hover > .map-tooltip, .map-tooltip.active { opacity: 1; visibility: visible; bottom: 115%; }
+        
+        input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type="number"] { -moz-appearance: textfield; }
+
+        body.viewer-mode .admin-only { display: none !important; }
+    </style>
+</head>
+<body class="text-slate-100 min-h-screen p-2 md:p-6 selection:bg-emerald-500/30 overflow-x-hidden">
+
+<div class="max-w-[1600px] mx-auto space-y-4 md:space-y-6 relative z-10">
+    <header class="flex flex-col xl:flex-row justify-between items-center xl:items-end gap-4 border-b border-slate-700/50 pb-4 md:pb-6 text-center xl:text-left">
+        <div>
+            <h1 class="text-3xl md:text-4xl font-black tracking-tighter leading-none uppercase">
+                <span id="mainTourneyTitle" class="text-emerald-500">SWISS TOURNAMENT</span>
+            </h1>
+            
+            <div id="roomCodeContainer" class="hidden flex items-center justify-center xl:justify-start gap-2 mt-3 flex-wrap">
+                <div id="liveIndicator" class="hidden items-center gap-1.5 mr-2 bg-slate-900 border border-slate-700 px-2 py-1 rounded">
+                    <div class="w-2 h-2 bg-red-500 rounded-full live-dot"></div>
+                    <span class="text-red-400 text-[10px] font-black uppercase tracking-widest">Live Sync</span>
+                </div>
+
+                <span class="text-slate-400 text-xs font-bold uppercase tracking-widest">Room:</span>
+                <span id="roomCodeDisplay" class="bg-slate-900 border border-slate-700 px-3 py-1 rounded text-xs font-bold tracking-widest text-emerald-400 select-all"></span>
+                
+                <span class="admin-only text-slate-400 text-xs font-bold uppercase tracking-widest ml-2">Admin Key:</span>
+                <span id="adminKeyDisplay" class="admin-only bg-slate-800 border border-slate-700 px-3 py-1 rounded text-xs font-bold tracking-widest text-transparent hover:text-yellow-400 hover:bg-slate-900 transition-all cursor-help select-all" title="Hover to reveal"></span>
+
+                <button onclick="copyRoomCode()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors p-1.5 rounded text-white shadow-md ml-1" title="Copy Codes">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                </button>
+                <button onclick="leaveRoom()" class="ml-2 bg-red-900/30 text-red-400 border border-red-500/30 hover:bg-red-600 hover:text-white transition-colors px-3 py-1 rounded text-xs font-bold uppercase tracking-widest shadow-md">Exit</button>
+            </div>
+        </div>
+        <div class="flex gap-2 flex-wrap justify-center xl:justify-end w-full xl:w-auto">
+            <input type="file" id="loadInput" accept=".json" class="hidden" onchange="loadTournament(event)">
+            <button type="button" onclick="document.getElementById('loadInput').click()" class="admin-only bg-slate-800/80 backdrop-blur hover:bg-slate-700 border border-slate-600 px-3 py-2 rounded-lg text-xs md:text-sm transition-all text-slate-300 shadow-md flex-1 xl:flex-none">📂 Restore Backup</button>
+            <button type="button" onclick="saveTournament()" class="bg-slate-800/80 backdrop-blur hover:bg-slate-700 border border-slate-600 px-3 py-2 rounded-lg text-xs md:text-sm transition-all text-slate-300 shadow-md flex-1 xl:flex-none">💾 Save JSON</button>
+            <button type="button" onclick="generateRandomTeams()" class="admin-only bg-slate-800/80 backdrop-blur hover:bg-slate-700 border border-slate-600 px-3 py-2 rounded-lg text-xs md:text-sm font-bold transition-all text-blue-400 flex-1 xl:flex-none">+ Gen Teams</button>
+            <button type="button" onclick="autoResolveMatches()" class="admin-only bg-purple-900/40 backdrop-blur hover:bg-purple-800/60 border border-purple-600/60 px-3 py-2 rounded-lg text-xs md:text-sm font-bold transition-all text-purple-300 shadow-[0_0_15px_rgba(147,51,234,0.3)] w-full sm:w-auto xl:flex-none">⚡ Auto-Resolve</button>
+            <button type="button" id="mainActionBtn" onclick="advanceTournament()" class="admin-only bg-emerald-600 hover:bg-emerald-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] active:scale-95 text-white w-full sm:w-auto xl:flex-none text-sm md:text-base">START STAGE</button>
+        </div>
+    </header>
+
+    <section class="glass-panel p-1 md:p-2 rounded-2xl md:rounded-3xl relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-r from-red-900/10 via-transparent to-emerald-900/10 pointer-events-none"></div>
+        <div class="flex flex-col sm:flex-row justify-between items-center px-4 md:px-6 py-3 md:py-4 relative z-20 gap-3 border-b border-slate-700/30">
+            <h2 class="text-sm md:text-lg font-black text-slate-200 uppercase tracking-widest flex items-center gap-2 md:gap-3">
+                <span id="vizTourneyName">SWISS TOURNAMENT</span> 
+                <span id="vizPhaseTag" class="text-emerald-400 bg-emerald-900/30 border border-emerald-500/30 px-2 md:px-3 py-1 rounded-full text-[10px] md:text-xs shadow-[0_0_10px_rgba(16,185,129,0.2)]">SWISS STAGE</span>
+            </h2>
+            <div id="viewToggle" class="hidden flex bg-slate-800/80 p-1 rounded-lg border border-slate-700 shadow-md">
+                <button type="button" id="btnViewSwiss" onclick="setViewPhase('swiss')" class="px-3 md:px-4 py-1 rounded text-[10px] md:text-xs font-bold transition-all">SWISS</button>
+                <button type="button" id="btnViewLeague" onclick="setViewPhase('league')" class="hidden px-3 md:px-4 py-1 rounded text-[10px] md:text-xs font-bold transition-all">PROVE IT</button>
+                <button type="button" id="btnViewPlayoffs" onclick="setViewPhase('playoffs')" class="px-3 md:px-4 py-1 rounded text-[10px] md:text-xs font-bold transition-all">PLAYOFFS</button>
+            </div>
+        </div>
+        <div id="visualizerContainer" class="viz-scroll overflow-x-auto pt-8 px-6 sm:px-12 flex gap-4 md:gap-8 items-stretch min-h-[500px] relative z-10 w-full scroll-smooth">
+            <div class="m-auto text-slate-500 italic font-medium text-sm tracking-wide">Awaiting Tournament Data...</div>
+        </div>
+    </section>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-8 items-start">
+        <div class="lg:col-span-4 space-y-4 md:space-y-6">
+            <section id="entrySection" class="admin-only glass-panel p-4 rounded-2xl">
+                <div class="flex flex-col gap-3">
+                    <div class="flex gap-2">
+                        <input id="tName" type="text" placeholder="Team Name" class="flex-[2] bg-slate-950/50 border border-slate-700 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-xs md:text-sm font-medium w-full text-white placeholder-slate-500">
+                        <input id="tTag" type="text" placeholder="TAG" maxlength="3" class="w-16 bg-slate-950/50 border border-slate-700 rounded-lg px-2 py-2 outline-none text-xs md:text-sm text-center uppercase font-bold text-blue-400 placeholder-slate-500">
+                    </div>
+                    <div class="text-[10px] md:text-[11px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-700 pb-1 mt-2">Roster & Seed Generator</div>
+                    <div id="playerInputs" class="space-y-2"></div>
+                    <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-700/50">
+                        <button type="button" id="addPlayerBtn" onclick="addPendingPlayer()" class="text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-900/20 px-2 py-1 rounded border border-emerald-500/30">+ Add Sub (6th)</button>
+                        <div class="text-xs text-slate-400 text-right">Team MMR: <span id="calcMMR" class="font-bold text-blue-400">0</span> <span id="calcRank" class="text-emerald-500 font-bold ml-1"></span></div>
+                    </div>
+                    <button type="button" onclick="addTeam()" class="w-full bg-blue-600 hover:bg-blue-500 px-4 py-2 mt-2 rounded-lg font-bold text-xs md:text-sm transition-all shadow-md uppercase tracking-widest">Add Team</button>
+                </div>
+            </section>
+            
+            <section class="glass-panel rounded-2xl overflow-hidden">
+                <div class="p-3 bg-slate-950/50 text-[10px] md:text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-700/50 flex justify-between">
+                    <span>Rank & Team</span>
+                    <span class="mr-2">W-L | RND DIFF</span>
+                </div>
+                <div id="standingsList" class="divide-y divide-slate-800/50 max-h-[400px] md:max-h-[600px] overflow-y-auto viz-scroll pb-2"></div>
+            </section>
+        </div>
+
+        <div class="lg:col-span-8 space-y-4 md:space-y-6">
+            <div class="glass-panel rounded-2xl p-3 md:p-4 flex flex-col sm:flex-row justify-between items-center text-center sm:text-left gap-2">
+                <div>
+                    <span id="phaseTag" class="text-[10px] md:text-xs font-bold uppercase tracking-widest text-emerald-500">Phase</span>
+                    <h2 id="roundDisplay" class="text-xl md:text-2xl font-black mt-1 tracking-tight">Setup</h2>
+                </div>
+            </div>
+            <div id="matchGrid" class="grid grid-cols-1 xl:grid-cols-2 gap-3 md:gap-4">
+                <div class="col-span-full p-8 md:p-12 text-center border-2 border-dashed border-slate-700/50 rounded-2xl md:rounded-3xl bg-slate-900/30 text-slate-400 text-sm md:text-base backdrop-blur-sm">Awaiting Matchups</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="vetoModal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[200] flex items-center justify-center p-2 md:p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl max-h-[95vh] flex flex-col overflow-hidden shadow-[0_0_50px_rgba(0,0,0,1)]">
+        <div class="bg-slate-800 p-3 md:p-4 border-b border-slate-700 flex justify-between items-center shrink-0">
+            <h3 class="text-base md:text-xl font-black text-white uppercase tracking-widest flex items-center gap-2 md:gap-3">Map Veto</h3>
+            <button type="button" onclick="closeVetoModal()" class="text-slate-400 hover:text-white transition-colors p-1">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+        </div>
+        <div class="p-3 md:p-6 bg-[#0b0f19] flex flex-col gap-4 md:gap-6 overflow-y-auto viz-scroll">
+            <div class="flex flex-col sm:flex-row justify-between items-center gap-3 md:gap-4">
+                <div class="flex items-center gap-2 md:gap-4 text-lg md:text-2xl font-black uppercase text-center w-full sm:w-auto justify-center">
+                    <span id="vetoTeam1" class="text-blue-400 drop-shadow-[0_0_5px_rgba(96,165,250,0.5)] truncate max-w-[120px] sm:max-w-[200px]"></span>
+                    <span class="text-slate-600 text-xs md:text-sm">VS</span>
+                    <span id="vetoTeam2" class="text-red-400 drop-shadow-[0_0_5px_rgba(248,113,113,0.5)] truncate max-w-[120px] sm:max-w-[200px]"></span>
+                </div>
+                <div class="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-full sm:w-auto justify-center">
+                    <button type="button" id="btnBo1" onclick="setVetoFormat('bo1')" class="px-4 md:px-5 py-1.5 rounded font-bold text-xs md:text-sm transition-all flex-1 sm:flex-none">BO1</button>
+                    <button type="button" id="btnBo3" onclick="setVetoFormat('bo3')" class="px-4 md:px-5 py-1.5 rounded font-bold text-xs md:text-sm transition-all flex-1 sm:flex-none">BO3</button>
+                </div>
+            </div>
+            <div id="vetoStatus" class="text-center text-sm md:text-xl bg-slate-800/80 py-2 md:py-3 rounded-lg border border-slate-700 shadow-inner font-black uppercase tracking-widest px-2"></div>
+            <div id="vetoMapsGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-4"></div>
+        </div>
+        <div class="bg-slate-800 p-3 md:p-4 border-t border-slate-700 flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
+            <button type="button" onclick="resetVeto()" class="text-red-400 hover:text-red-300 font-bold text-xs md:text-sm flex items-center justify-center gap-1 bg-red-900/20 px-4 py-2 rounded border border-red-500/30 transition-colors w-full sm:w-auto">Reset Veto</button>
+            <button type="button" onclick="closeVetoModal()" class="bg-emerald-600 hover:bg-emerald-500 px-6 md:px-8 py-2 md:py-2.5 rounded-lg text-white font-bold transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] text-xs md:text-sm w-full sm:w-auto">Confirm & Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="rankModal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-sm z-[250] flex items-center justify-center p-2 md:p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-[0_0_40px_rgba(0,0,0,1)]">
+        <div class="bg-slate-800 p-3 md:p-4 border-b border-slate-700 flex justify-between items-center shrink-0">
+            <h3 class="text-base md:text-xl font-black text-white uppercase tracking-widest">Select Player Rank</h3>
+            <button type="button" onclick="closeRankModal()" class="text-slate-400 hover:text-white transition-colors p-1">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+        </div>
+        <div id="rankModalGrid" class="p-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 overflow-y-auto viz-scroll bg-[#0b0f19]"></div>
+    </div>
+</div>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyDHgel5YFWgl7uJzW14Iu3ameFnkxzize4",
+        authDomain: "dakshh-swiss-trial-f52fa.firebaseapp.com",
+        databaseURL: "https://dakshh-swiss-trial-f52fa-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "dakshh-swiss-trial-f52fa",
+        storageBucket: "dakshh-swiss-trial-f52fa.firebasestorage.app",
+        messagingSenderId: "797986639714",
+        appId: "1:797986639714:web:ee69e0cd6e20efb1d1263b"
+    };
+    
+    if (!firebase.apps.length) { firebase.initializeApp(firebaseConfig); }
+    const db = firebase.database();
+
+    let isLive = false;
+    let isAdmin = false;
+    let currentRoomCode = null;
+    let currentAdminKey = null;
+
+    let tournamentName = "SWISS TOURNAMENT";
+    let tournamentFormat = 'standard';
+    let swingCount = 0;
+    
+    let phase = 'swiss'; 
+    let viewPhase = 'swiss';
+    let teams = [];
+    let matches = [];
+    let currentRound = 0;
+    let playoffMatches = { qf: [], sf: [], final: null, third: null };
+
+    function sanitizeState() {
+        if (teams && !Array.isArray(teams)) teams = Object.values(teams);
+        if (matches && !Array.isArray(matches)) matches = Object.values(matches);
+        teams = teams || []; matches = matches || [];
+        
+        if (!playoffMatches) playoffMatches = { qf: [], sf: [], final: null, third: null };
+        if (playoffMatches.qf && !Array.isArray(playoffMatches.qf)) playoffMatches.qf = Object.values(playoffMatches.qf);
+        if (playoffMatches.sf && !Array.isArray(playoffMatches.sf)) playoffMatches.sf = Object.values(playoffMatches.sf);
+        playoffMatches.qf = playoffMatches.qf || []; playoffMatches.sf = playoffMatches.sf || [];
+
+        teams.forEach(t => {
+            t.history = t.history ? (Array.isArray(t.history) ? t.history : Object.values(t.history)) : [];
+            t.players = t.players ? (Array.isArray(t.players) ? t.players : Object.values(t.players)) : [];
+        });
+        matches.forEach(m => {
+            if (m.veto) m.veto.history = m.veto.history ? (Array.isArray(m.veto.history) ? m.veto.history : Object.values(m.veto.history)) : [];
+            m.mapScores = m.mapScores ? (Array.isArray(m.mapScores) ? m.mapScores : Object.values(m.mapScores)) : [];
+        });
+        const allP = [...(playoffMatches.qf || []), ...(playoffMatches.sf || []), playoffMatches.final, playoffMatches.third].filter(Boolean);
+        allP.forEach(m => {
+            if (m.veto) m.veto.history = m.veto.history ? (Array.isArray(m.veto.history) ? m.veto.history : Object.values(m.veto.history)) : [];
+            m.mapScores = m.mapScores ? (Array.isArray(m.mapScores) ? m.mapScores : Object.values(m.mapScores)) : [];
+        });
+    }
+
+    window.onload = () => {
+        const offlineData = localStorage.getItem('dakshh_offline_data');
+        if (offlineData) {
+            try {
+                const state = JSON.parse(offlineData);
+                tournamentName = state.tournamentName || "SWISS TOURNAMENT";
+                tournamentFormat = state.tournamentFormat || 'standard';
+                swingCount = state.swingCount || 0;
+                phase = state.phase || 'swiss';
+                viewPhase = state.viewPhase || phase;
+                teams = state.teams || [];
+                matches = state.matches || [];
+                currentRound = state.currentRound || 0;
+                playoffMatches = state.playoffMatches || { qf: [], sf: [], final: null, third: null };
+                
+                sanitizeState();
+                isAdmin = true; isLive = false;
+                
+                document.getElementById('roomCodeContainer').classList.add('hidden');
+                document.body.classList.remove('viewer-mode');
+                localStorage.removeItem('dakshh_offline_data');
+                render();
+            } catch (e) { window.location.href = "index.html"; }
+            return;
+        }
+
+        const savedRoom = localStorage.getItem('dakshh_room');
+        const savedAdminStatus = localStorage.getItem('dakshh_admin');
+        const savedAdminKey = localStorage.getItem('dakshh_adminKey');
+        
+        if (savedRoom) {
+            currentRoomCode = savedRoom;
+            isLive = true;
+            isAdmin = savedAdminStatus === 'true';
+            if(isAdmin && savedAdminKey) currentAdminKey = savedAdminKey;
+            
+            document.getElementById('roomCodeDisplay').innerText = currentRoomCode;
+            if(isAdmin && currentAdminKey) document.getElementById('adminKeyDisplay').innerText = currentAdminKey;
+            
+            document.getElementById('roomCodeContainer').classList.remove('hidden');
+            document.getElementById('roomCodeContainer').classList.add('flex');
+            document.getElementById('liveIndicator').classList.remove('hidden');
+            document.getElementById('liveIndicator').classList.add('flex');
+            
+            if (!isAdmin) document.body.classList.add('viewer-mode');
+            
+            startDatabaseListener();
+        } else {
+            window.location.href = "index.html";
+        }
+        
+        if (isAdmin && teams.length === 0) renderTeamForm();
+    };
+
+    function startDatabaseListener() {
+        db.ref('tournaments/' + currentRoomCode).on('value', (snapshot) => {
+            const state = snapshot.val();
+            if (state) {
+                if (state.phase && state.phase !== phase) { viewPhase = state.phase; }
+                
+                const oldMatches = matches;
+                const oldPlayoffs = playoffMatches;
+
+                tournamentName = state.tournamentName || "SWISS TOURNAMENT";
+                tournamentFormat = state.tournamentFormat || 'standard';
+                swingCount = state.swingCount || 0;
+                phase = state.phase || 'swiss';
+                teams = state.teams || [];
+                matches = state.matches || [];
+                currentRound = state.currentRound || 0;
+                playoffMatches = state.playoffMatches || { qf: [], sf: [], final: null, third: null };
+                
+                if (state.adminKey && !currentAdminKey) currentAdminKey = state.adminKey;
+                
+                sanitizeState();
+
+                if (isAdmin) {
+                    preserveInputs();
+                    matches.forEach(newM => {
+                        const oldM = oldMatches.find(x => x.id === newM.id);
+                        if (oldM) { Object.keys(oldM).forEach(k => { if (k.startsWith('tempS')) newM[k] = oldM[k]; }); }
+                    });
+                    const allOldP = [...(oldPlayoffs.qf||[]), ...(oldPlayoffs.sf||[]), oldPlayoffs.final, oldPlayoffs.third].filter(Boolean);
+                    const allNewP = [...playoffMatches.qf, ...playoffMatches.sf, playoffMatches.final, playoffMatches.third].filter(Boolean);
+                    allNewP.forEach(newM => {
+                        const oldM = allOldP.find(x => x.id === newM.id);
+                        if (oldM) { Object.keys(oldM).forEach(k => { if (k.startsWith('tempS')) newM[k] = oldM[k]; }); }
+                    });
+                }
+                
+                calculateStats();
+                render();
+            } else if (!isAdmin) {
+                alert("Room not found or event ended!");
+                leaveRoom();
+            }
+        });
+    }
+
+    function leaveRoom() {
+        localStorage.removeItem('dakshh_room');
+        localStorage.removeItem('dakshh_admin');
+        localStorage.removeItem('dakshh_adminKey');
+        localStorage.removeItem('dakshh_offline_data');
+        window.location.href = "index.html";
+    }
+
+    function copyRoomCode() {
+        if(currentRoomCode) {
+            let text = "Room ID: " + currentRoomCode;
+            if (isAdmin && currentAdminKey) text += " | Admin Key: " + currentAdminKey;
+            navigator.clipboard.writeText(text);
+            alert("Copied to clipboard!\n" + text);
+        }
+    }
+
+    function loadTournament(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        if (!confirm("SAFEGUARD WARNING: Are you sure you want to completely overwrite the current tournament with this backup file?")) {
+            event.target.value = "";
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const state = JSON.parse(e.target.result);
+                tournamentName = state.tournamentName || "SWISS TOURNAMENT";
+                tournamentFormat = state.tournamentFormat || 'standard';
+                swingCount = state.swingCount || 0;
+                phase = state.phase || 'swiss';
+                viewPhase = state.viewPhase || phase;
+                teams = state.teams || [];
+                matches = state.matches || [];
+                currentRound = state.currentRound || 0;
+                playoffMatches = state.playoffMatches || { qf: [], sf: [], final: null, third: null };
+                
+                sanitizeState();
+                calculateStats();
+                
+                const tournamentState = { tournamentName, tournamentFormat, swingCount, phase, viewPhase, teams, matches, currentRound, playoffMatches };
+                
+                if (isLive && isAdmin && currentRoomCode) {
+                    if (currentAdminKey) tournamentState.adminKey = currentAdminKey;
+                    db.ref('tournaments/' + currentRoomCode).set(tournamentState).then(() => {
+                        alert("Safeguard Successful: Backup restored across all live screens!");
+                    });
+                } else if (!isLive && isAdmin) {
+                    localStorage.setItem('dakshh_offline_data', JSON.stringify(tournamentState));
+                    render();
+                    alert("Safeguard Successful: Offline backup restored!");
+                }
+            } catch (err) { alert("Invalid JSON file format"); }
+        };
+        reader.readAsText(file);
+        event.target.value = ""; 
+    }
+
+    function saveTournament() {
+        try {
+            if (isAdmin) preserveInputs();
+            const state = { 
+                tournamentName: tournamentName || "SWISS TOURNAMENT", 
+                tournamentFormat: tournamentFormat || "standard", 
+                swingCount: swingCount || 0, 
+                phase: phase || "swiss", 
+                viewPhase: viewPhase || "swiss", 
+                teams: teams || [], 
+                matches: matches || [], 
+                currentRound: currentRound || 0, 
+                playoffMatches: playoffMatches || { qf: [], sf: [], final: null, third: null }
+            };
+            const dataStr = JSON.stringify(state, null, 2);
+            const blob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.style.display = "none";
+            a.href = url;
+            let safeName = (tournamentName || "Tournament").replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            a.download = `${safeName}_R${currentRound || 0}.json`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); window.URL.revokeObjectURL(url); }, 100);
+        } catch (err) { alert("Failed to save the file."); }
+    }
+
+    function commitState(skipRender = false) {
+        if (isAdmin) preserveInputs();
+        calculateStats(); 
+        if (!skipRender) render();
+        
+        const tournamentState = { tournamentName, tournamentFormat, swingCount, phase, viewPhase, teams, matches, currentRound, playoffMatches };
+        
+        if (isLive && isAdmin && currentRoomCode) {
+            if (currentAdminKey) tournamentState.adminKey = currentAdminKey;
+            db.ref('tournaments/' + currentRoomCode).set(tournamentState);
+        } else if (!isLive && isAdmin) {
+            localStorage.setItem('dakshh_offline_data', JSON.stringify(tournamentState));
+        }
+    }
+
+    const VALORANT_MAPS = ["Abyss", "Bind", "Breeze", "Corrode", "Haven", "Pearl", "Split"];
+    const MAP_IMAGES = {
+        "Abyss": "https://media.valorant-api.com/maps/224b0a95-48b9-f703-1bd8-67aca101a61f/splash.png", 
+        "Bind": "https://media.valorant-api.com/maps/2c9d57ec-4431-9c5e-2939-8f9ef6dd5cba/splash.png",
+        "Breeze": "https://media.valorant-api.com/maps/2fb9a4fd-47b8-4e7d-a969-74b4046ebd53/splash.png",
+        "Corrode": "https://media.valorant-api.com/maps/1c18ab1f-420d-0d8b-71d0-77ad3c439115/splash.png", 
+        "Haven": "https://media.valorant-api.com/maps/2bee0dc9-4ffe-519b-1cbd-7fbe763a6047/splash.png",
+        "Pearl": "https://media.valorant-api.com/maps/fd267378-4d1d-484f-ff52-77821ed10dc2/splash.png",
+        "Split": "https://media.valorant-api.com/maps/d960549e-485c-e861-8d71-aa9d1aed12a2/splash.png"
+    };
+
+    const RANK_DATA = {
+        "Iron 1": { mmr: 1000, id: 3 }, "Iron 2": { mmr: 1050, id: 4 }, "Iron 3": { mmr: 1100, id: 5 },
+        "Bronze 1": { mmr: 1150, id: 6 }, "Bronze 2": { mmr: 1200, id: 7 }, "Bronze 3": { mmr: 1250, id: 8 },
+        "Silver 1": { mmr: 1300, id: 9 }, "Silver 2": { mmr: 1350, id: 10 }, "Silver 3": { mmr: 1400, id: 11 },
+        "Gold 1": { mmr: 1450, id: 12 }, "Gold 2": { mmr: 1500, id: 13 }, "Gold 3": { mmr: 1550, id: 14 },
+        "Platinum 1": { mmr: 1600, id: 15 }, "Platinum 2": { mmr: 1650, id: 16 }, "Platinum 3": { mmr: 1700, id: 17 },
+        "Diamond 1": { mmr: 1750, id: 18 }, "Diamond 2": { mmr: 1800, id: 19 }, "Diamond 3": { mmr: 1850, id: 20 },
+        "Ascendant 1": { mmr: 1900, id: 21 }, "Ascendant 2": { mmr: 1950, id: 22 }, "Ascendant 3": { mmr: 2000, id: 23 },
+        "Immortal 1": { mmr: 2100, id: 24 }, "Immortal 2": { mmr: 2200, id: 25 }, "Immortal 3": { mmr: 2300, id: 26 },
+        "Radiant": { mmr: 2500, id: 27 }
+    };
+    function getRankImg(id) { return `https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/${id}/largeicon.png`; }
+
+    let pendingPlayers = Array(5).fill(null).map((_, i) => ({ name: `Player ${i+1}`, rank: "Gold 2" }));
+    let activePlayerRankIdx = null;
+
+    function renderTeamForm() {
+        const container = document.getElementById('playerInputs');
+        container.innerHTML = pendingPlayers.map((p, idx) => `
+            <div class="flex gap-2 items-center">
+                <input type="text" value="${p.name}" onchange="updatePlayerName(${idx}, this.value)" placeholder="Player ${idx+1}" class="flex-[2] bg-slate-950/50 border border-slate-700 rounded px-2 py-1.5 outline-none focus:border-emerald-500 text-xs text-slate-200 placeholder-slate-600">
+                <button type="button" onclick="openRankModal(${idx})" class="flex-[1] bg-slate-950/50 border border-slate-600 rounded flex items-center justify-between px-2 py-1 hover:bg-slate-800 transition-colors group relative overflow-hidden" title="${p.rank}">
+                    <div class="absolute inset-0 bg-cover bg-center opacity-30 group-hover:opacity-50 transition-opacity" style="background-image: url('${getRankImg(RANK_DATA[p.rank].id)}'); background-size: 80%; background-repeat: no-repeat;"></div>
+                    <span class="text-[10px] font-bold truncate z-10 drop-shadow-md w-full text-center">${p.rank}</span>
+                </button>
+                ${idx === 5 ? `<button type="button" onclick="removePendingPlayer(${idx})" class="text-red-400 hover:text-red-300 font-bold px-1 text-sm bg-slate-800 rounded">✕</button>` : `<div class="w-4"></div>`}
+            </div>
+        `).join('');
+        document.getElementById('addPlayerBtn').style.display = pendingPlayers.length >= 6 ? 'none' : 'block';
+        updateMMRDisplay();
+    }
+
+    function updatePlayerName(idx, val) { pendingPlayers[idx].name = val; }
+    function addPendingPlayer() { if (pendingPlayers.length < 6) { pendingPlayers.push({ name: `Player 6`, rank: "Gold 2" }); renderTeamForm(); } }
+    function removePendingPlayer(idx) { pendingPlayers.splice(idx, 1); renderTeamForm(); }
+    function openRankModal(idx) {
+        activePlayerRankIdx = idx;
+        document.getElementById('rankModalGrid').innerHTML = Object.keys(RANK_DATA).map(r => `<button type="button" onclick="selectRank('${r}')" class="flex flex-col items-center justify-center p-2 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 hover:border-blue-500 transition-all group active:scale-95"><img src="${getRankImg(RANK_DATA[r].id)}" alt="${r}" class="w-10 h-10 md:w-14 md:h-14 mb-2 drop-shadow-lg group-hover:scale-110 transition-transform"><span class="text-[9px] md:text-[11px] font-bold text-center text-slate-300 group-hover:text-white uppercase tracking-wider">${r}</span></button>`).join('');
+        document.getElementById('rankModal').classList.remove('hidden');
+    }
+    function closeRankModal() { document.getElementById('rankModal').classList.add('hidden'); activePlayerRankIdx = null; }
+    function selectRank(rank) { if (activePlayerRankIdx !== null) pendingPlayers[activePlayerRankIdx].rank = rank; closeRankModal(); renderTeamForm(); }
+
+    function calculateStackMMR(ranks) {
+        if (ranks.length === 0) return { mmr: 0, predicted: "Unrated" };
+        const mmrs = ranks.map(r => RANK_DATA[r].mmr);
+        const avg = mmrs.reduce((a, b) => a + b, 0) / mmrs.length;
+        const highest = Math.max(...mmrs);
+        const spread = highest - Math.min(...mmrs);
+        const adjusted_mmr = avg + ((highest - avg) * 0.25) + (spread * 0.10) + (ranks.length === 5 ? 25 : (ranks.length === 6 ? 35 : 0));
+        let closest_rank = null, closest_diff = Infinity;
+        for (const [r, data] of Object.entries(RANK_DATA)) {
+            const diff = Math.abs(adjusted_mmr - data.mmr);
+            if (diff < closest_diff) { closest_diff = diff; closest_rank = r; }
+        }
+        return { mmr: Math.round(adjusted_mmr), predicted: closest_rank };
+    }
+
+    function updateMMRDisplay() {
+        const stats = calculateStackMMR(pendingPlayers.map(p => p.rank));
+        document.getElementById('calcMMR').innerText = stats.mmr;
+        document.getElementById('calcRank').innerText = stats.predicted;
+    }
+
+    let activeVetoMatchId = null;
+    const VETO_STEPS = {
+        'bo1': [{action:'ban',by:'t1'},{action:'ban',by:'t2'},{action:'ban',by:'t1'},{action:'ban',by:'t2'},{action:'ban',by:'t1'},{action:'ban',by:'t2'},{action:'decider',by:'auto'}],
+        'bo3': [{action:'ban',by:'t1'},{action:'ban',by:'t2'},{action:'pick',by:'t1'},{action:'pick',by:'t2'},{action:'ban',by:'t1'},{action:'ban',by:'t2'},{action:'decider',by:'auto'}]
+    };
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.map-tooltip') && !e.target.closest('.team-roster-panel') && !e.target.closest('[onclick*="toggleTooltip"]')) {
+            document.querySelectorAll('.map-tooltip.active').forEach(el => el.classList.remove('active'));
+        }
+    });
+
+    function toggleTooltip(e, tooltipId) {
+        if(e) e.stopPropagation();
+        const target = document.getElementById('tooltip_' + tooltipId);
+        if (!target) return;
+        const isActive = target.classList.contains('active');
+        document.querySelectorAll('.map-tooltip.active').forEach(el => el.classList.remove('active'));
+        if (!isActive) target.classList.add('active');
+    }
+
+    function generateRandomTeams() {
+        if(!isAdmin) return;
+        
+        const isMod = tournamentFormat === 'modified';
+        const targetTeams = isMod ? 20 : 16;
+        const teamsToAdd = targetTeams - teams.length;
+
+        if (teamsToAdd <= 0) {
+            alert(`Roster is already full! (${targetTeams} teams max)`);
+            return;
+        }
+
+        const proTeams = [{n:"Rentinels",t:"RNT"},{n:"Plastic Rex",t:"PRX"},{n:"PANIC",t:"PNC"},{n:"QUIET",t:"QUT"},{n:"Team Pathetics",t:"PTH"},{n:"Farming Corp",t:"FMC"},{n:"Lethargy",t:"LTH"},{n:"Levitation",t:"LEV"},{n:"Gen.Z",t:"GNZ"},{n:"DR-ZZZ",t:"DZZ"},{n:"ZERO DIVISION",t:"ZRO"},{n:"Clown9",t:"CL9"},{n:"100 Throwers",t:"100"},{n:"Tier 2",t:"T2"},{n:"Bleed ELO",t:"BLD"},{n:"SillyBili",t:"SBG"}, {n:"Omen Mains",t:"OMN"}, {n:"Jett Revive",t:"JTR"}, {n:"Spike Rushers",t:"SPR"}, {n:"Eco Fraggers",t:"ECO"}];
+        const pseudoNames = ["ElevenZ","nay","gaspass","Toaster","Turkey","Bionicle","Betajer","Pinggg","f0rgotteN","nothing","TaCo","Tekken","Angel2","m0m","tent","violin","twig","Defeat","smashies","Starved","qUeeN","pANcake","More","Bats","Bluegar","WhispeR","Syruppi","Tardis","cBed","Zipper","Meow","SPAGHETTI","flapr","ShaBAM","HealtHy","Geico","Hakuna","boom","Pyro","Celsius","janeqt","Nerfio","PbJ","solar","Toothgemo","B0T","Methan","Mex","web","aeiou","Donotplayer","zeta","Pumpkin","Comet","M0del","Nokia","Karen","Bossi","whiff","AimPunch","Iron1Demon","BotFrag","NoKevlar","DropVandal","HealMeSage","JettReviveMe","LagSpike","HighPing","AltTab","WallBang", "LineupLarry", "OdinAbuser", "InstalockReyna", "FF15", "ShiftWalker", "CrouchGamer", "ViperMains", "SmurfAccount", "RankedDemon", "Hardstuck", "IronSlayer", "NeonSlider", "BrimLineups"];
+        const rankKeys = Object.keys(RANK_DATA);
+        const shuffledNames = [...pseudoNames].sort(() => Math.random() - 0.5);
+        let nameIdx = 0;
+
+        let currentSwings = teams.filter(t => t.isSwing).length;
+        let neededSwings = isMod ? Math.max(0, swingCount - currentSwings) : 0;
+        const startIndex = teams.length;
+
+        for(let i=0; i<teamsToAdd; i++) {
+            let fPlayers = [];
+            const rosterSize = Math.random() > 0.5 ? 6 : 5; 
+            for(let j=0; j<rosterSize; j++) {
+                const rKey = rankKeys[Math.floor(Math.random() * 6) + 19];
+                fPlayers.push({ name: shuffledNames[nameIdx++ % shuffledNames.length], rank: rKey });
+            }
+            const stats = calculateStackMMR(fPlayers.map(p => p.rank));
+            
+            let tName = proTeams[(startIndex + i) % proTeams.length].n;
+            let tTag = proTeams[(startIndex + i) % proTeams.length].t;
+            let isSwing = false;
+
+            if (isMod && i >= teamsToAdd - neededSwings) {
+                currentSwings++;
+                tName = `Swing Team ${currentSwings}`;
+                tTag = `SWG`;
+                isSwing = true;
+            }
+
+            teams.push({ 
+                id: 'T' + Date.now() + Math.random().toString(36).substring(2), 
+                name: tName, tag: tTag, initialSeed: stats.mmr, players: fPlayers, 
+                wins: 0, losses: 0, mapsWon: 0, mapsLost: 0, roundsWon: 0, roundsLost: 0, roundDiff: 0, buchholz: 0, 
+                history: [], status: 'active', isSwing: isSwing 
+            });
+        }
+        commitState();
+    }
+
+    function addTeam() {
+        if(!isAdmin) return;
+        const n = document.getElementById('tName').value.trim();
+        let tag = document.getElementById('tTag').value.trim().toUpperCase();
+        if (!n || pendingPlayers.some(p => p.name.trim() === '')) return;
+        if (!tag) tag = n.substring(0,3).toUpperCase();
+        const stats = calculateStackMMR(pendingPlayers.map(p => p.rank));
+        
+        let isSwing = false;
+        if (tournamentFormat === 'modified') {
+            const currentSwings = teams.filter(t => t.isSwing).length;
+            if (n.toUpperCase().includes('SWING') || (currentSwings < swingCount && teams.length >= 20 - swingCount)) {
+                isSwing = true;
+            }
+        }
+
+        teams.push({ 
+            id: 'T_' + Date.now().toString(), name: n, tag: tag, initialSeed: stats.mmr, players: JSON.parse(JSON.stringify(pendingPlayers)), 
+            wins: 0, losses: 0, mapsWon: 0, mapsLost: 0, roundsWon: 0, roundsLost: 0, roundDiff: 0, buchholz: 0, 
+            history: [], status: 'active', isSwing: isSwing 
+        });
+        document.getElementById('tName').value = ""; document.getElementById('tTag').value = "";
+        pendingPlayers = Array(5).fill(null).map((_, i) => ({ name: `Player ${i+1}`, rank: "Gold 2" }));
+        renderTeamForm();
+        commitState();
+    }
+
+    function calculateStats() {
+        teams.forEach(t => { 
+            t.wins = 0; t.losses = 0; t.roundsWon = 0; t.roundsLost = 0; t.mapsWon = 0; t.mapsLost = 0; t.history = []; 
+        });
+        
+        matches.forEach(m => {
+            if (m.winnerId && m.mapScores) {
+                const t1 = teams.find(t => t.id === m.t1.id);
+                const t2 = teams.find(t => t.id === m.t2.id);
+                if (t1 && t2) {
+                    let t1M = 0, t2M = 0;
+                    m.mapScores.forEach(score => {
+                        if (m.type === 'swiss' || m.type === 'playoff') {
+                            t1.roundsWon += score.s1; t1.roundsLost += score.s2;
+                            t2.roundsWon += score.s2; t2.roundsLost += score.s1;
+                        }
+                        if (score.s1 > score.s2) t1M++; else t2M++;
+                    });
+
+                    if (m.type === 'swiss') {
+                        if (m.winnerId === t1.id) { t1.wins++; t2.losses++; } else { t2.wins++; t1.losses++; }
+                        t1.history.push(t2.id); t2.history.push(t1.id);
+                        t1.mapsWon += t1M; t1.mapsLost += t2M; t2.mapsWon += t2M; t2.mapsLost += t1M;
+                    }
+                }
+            }
+        });
+
+        teams.forEach(t => {
+            t.buchholz = t.history.reduce((acc, oppId) => {
+                const opp = teams.find(team => team.id === oppId);
+                return acc + (opp ? (opp.wins - opp.losses) : 0);
+            }, 0);
+            t.roundDiff = t.roundsWon - t.roundsLost;
+            
+            if (tournamentFormat === 'standard') {
+                if (t.wins >= 3) t.status = 'qualified';
+                else if (t.losses >= 3) t.status = 'eliminated';
+                else t.status = 'active';
+            } else if (tournamentFormat === 'modified') {
+                if (phase === 'swiss') {
+                    if (t.losses === 2 && currentRound <= 3) t.status = 'eliminated';
+                    else t.status = 'active'; 
+                }
+            }
+        });
+    }
+
+    function getSortedTeams() {
+        calculateStats(); 
+        return [...teams].sort((a, b) => {
+            if (tournamentFormat === 'modified' && phase !== 'swiss') {
+                const getTier = (t) => {
+                    if (t.isSwing) return 0;
+                    if (t.status === 'qualified') return 5;          
+                    if (t.status === 'qualified_league') return 4;   
+                    if (t.status === 'league') return 3;             
+                    if (t.status === 'eliminated_league') return 2;  
+                    return 1;                                        
+                };
+                const tierA = getTier(a);
+                const tierB = getTier(b);
+                if (tierA !== tierB) return tierB - tierA; 
+            }
+
+            if (tournamentFormat === 'modified' && (phase === 'league' || phase === 'playoffs')) {
+                if (a.status === 'qualified_league' && b.status === 'qualified_league') {
+                    if (a.leagueRank && b.leagueRank) return a.leagueRank - b.leagueRank;
+                }
+                if (a.status === 'league' && b.status === 'league') {
+                    if (a.playinSeed && b.playinSeed) return a.playinSeed - b.playinSeed;
+                }
+            }
+
+            if (b.wins !== a.wins) return b.wins - a.wins;
+            if (a.losses !== b.losses) return a.losses - b.losses;
+            if (b.roundDiff !== a.roundDiff) return b.roundDiff - a.roundDiff;
+            if (b.buchholz !== a.buchholz) return b.buchholz - a.buchholz;
+            return b.initialSeed - a.initialSeed;
+        });
+    }
+
+    function getMatchById(id) {
+        let m = matches.find(x => x.id === id);
+        if (m) return m;
+        const allP = [...(playoffMatches.qf || []), ...(playoffMatches.sf || []), playoffMatches.final, playoffMatches.third].filter(Boolean);
+        return allP.find(x => x && x.id === id);
+    }
+
+    function preserveInputs() {
+        if(!isAdmin) return;
+        const active = phase === 'swiss' || phase === 'league' ? matches : [...(playoffMatches.qf || []), ...(playoffMatches.sf || []), playoffMatches.final, playoffMatches.third].filter(Boolean);
+        active.forEach(m => {
+            if (m && !m.winnerId && m.veto && m.veto.history.length === 7) {
+                const playable = m.veto.history.filter(h => h.action === 'pick' || h.action === 'decider');
+                playable.forEach((p, idx) => {
+                    const s1El = document.getElementById(`s1_${m.id}_${idx}`);
+                    const s2El = document.getElementById(`s2_${m.id}_${idx}`);
+                    if (s1El) m[`tempS1_${idx}`] = s1El.value;
+                    if (s2El) m[`tempS2_${idx}`] = s2El.value;
+                });
+            }
+        });
+    }
+
+    function setViewPhase(vp) { viewPhase = vp; render(); }
+
+    function openVetoModal(matchId) {
+        if(!isAdmin) return;
+        preserveInputs();
+        activeVetoMatchId = matchId;
+        const match = getMatchById(matchId);
+        if (!match.veto) {
+            match.veto = { format: (phase === 'playoffs' || phase === 'league' || (match.pool && match.pool.includes('2'))) ? 'bo3' : 'bo1', history: [] };
+        }
+        document.getElementById('vetoModal').classList.remove('hidden');
+        renderVetoModal();
+    }
+
+    function closeVetoModal() {
+        document.getElementById('vetoModal').classList.add('hidden');
+        activeVetoMatchId = null;
+        commitState();
+    }
+
+    function setVetoFormat(fmt) {
+        if(!isAdmin) return;
+        const match = getMatchById(activeVetoMatchId);
+        match.veto.format = fmt; match.veto.history = [];
+        renderVetoModal();
+    }
+
+    function resetVeto() { if(isAdmin){ getMatchById(activeVetoMatchId).veto.history = []; renderVetoModal(); } }
+
+    function handleMapClick(e, mapName) {
+        if(!isAdmin) return;
+        e.stopPropagation();
+        const match = getMatchById(activeVetoMatchId);
+        const v = match.veto;
+        if (v.history.some(h => h.map === mapName)) return; 
+        const step = VETO_STEPS[v.format][v.history.length];
+        if (!step || step.action === 'decider') return; 
+        v.history.push({ map: mapName, action: step.action, by: step.by === 't1' ? match.t1.id : match.t2.id });
+        if (v.history.length === 6) {
+            const remainingMap = VALORANT_MAPS.find(m => !v.history.some(h => h.map === m));
+            v.history.push({ map: remainingMap, action: 'decider', by: 'auto' });
+        }
+        renderVetoModal();
+    }
+
+    function renderVetoModal() {
+        const match = getMatchById(activeVetoMatchId);
+        const v = match.veto;
+        document.getElementById('vetoTeam1').innerText = match.t1.name;
+        document.getElementById('vetoTeam2').innerText = match.t2.name;
+        document.getElementById('btnBo1').className = v.format === 'bo1' ? 'px-4 md:px-5 py-1.5 bg-blue-600 rounded text-white font-black text-xs md:text-sm shadow-[0_0_10px_rgba(37,99,235,0.5)] flex-1 sm:flex-none' : 'px-4 md:px-5 py-1.5 hover:bg-slate-700 rounded text-slate-400 font-bold text-xs md:text-sm flex-1 sm:flex-none';
+        document.getElementById('btnBo3').className = v.format === 'bo3' ? 'px-4 md:px-5 py-1.5 bg-blue-600 rounded text-white font-black text-xs md:text-sm shadow-[0_0_10px_rgba(37,99,235,0.5)] flex-1 sm:flex-none' : 'px-4 md:px-5 py-1.5 hover:bg-slate-700 rounded text-slate-400 font-bold text-xs md:text-sm flex-1 sm:flex-none';
+        
+        const statusEl = document.getElementById('vetoStatus');
+        if (v.history.length < 7) {
+            const step = VETO_STEPS[v.format][v.history.length];
+            const tName = step.by === 't1' ? `<span class="text-blue-400">${match.t1.name}</span>` : `<span class="text-red-400">${match.t2.name}</span>`;
+            statusEl.innerHTML = `${tName} <span class="text-slate-400 font-medium ml-2">${step.action === 'ban'?'BAN':'PICK'} MAP</span>`;
+        } else {
+            statusEl.innerHTML = `<span class="text-emerald-400 drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]">VETO COMPLETE</span>`;
+        }
+        
+        document.getElementById('vetoMapsGrid').innerHTML = VALORANT_MAPS.map(map => {
+            const hIndex = v.history.findIndex(h => h.map === map);
+            const hItem = hIndex !== -1 ? v.history[hIndex] : null;
+            const stepNum = hItem ? `<div class="absolute top-2 left-2 md:left-3 text-xs md:text-sm font-black text-slate-100 z-20 drop-shadow-[0_2px_2px_rgba(0,0,0,1)]">#${hIndex + 1}</div>` : '';
+            let bClass = "group h-24 md:h-32 flex items-center justify-center rounded-xl border-2 font-black text-base md:text-2xl uppercase tracking-widest transition-all relative overflow-hidden ";
+            let overlay = "";
+            if (!hItem) { bClass += "border-slate-700 bg-slate-900 text-slate-300 hover:border-blue-500 hover:text-white hover:scale-[1.02] cursor-pointer shadow-lg"; }
+            else if (hItem.action === 'ban') { const bName = hItem.by === match.t1.id ? match.t1.tag||match.t1.name.substring(0,3) : match.t2.tag||match.t2.name.substring(0,3); bClass += "border-red-600/50 bg-slate-900 text-red-500 opacity-60 cursor-not-allowed"; overlay = `<div class="absolute inset-0 flex items-center justify-center z-20"><div class="w-[120%] h-1 bg-red-600 rotate-[20deg] opacity-70"></div></div><div class="absolute bottom-1 md:bottom-2 bg-red-900/90 px-2 py-0.5 rounded text-[9px] md:text-xs text-red-100 border border-red-500/50 z-20 drop-shadow-md">BANNED: ${bName.toUpperCase()}</div>`; }
+            else if (hItem.action === 'pick') { const bName = hItem.by === match.t1.id ? match.t1.tag||match.t1.name.substring(0,3) : match.t2.tag||match.t2.name.substring(0,3); bClass += "border-emerald-500 bg-slate-900 text-emerald-400 cursor-not-allowed shadow-[0_0_20px_rgba(16,185,129,0.3)]"; overlay = `<div class="absolute bottom-1 md:bottom-2 bg-emerald-900/90 px-2 py-0.5 rounded text-[9px] md:text-xs text-emerald-100 border border-emerald-500/50 z-20 drop-shadow-md">PICKED: ${bName.toUpperCase()}</div>`; }
+            else if (hItem.action === 'decider') { bClass += "border-yellow-500 bg-slate-900 text-yellow-400 cursor-not-allowed shadow-[0_0_20px_rgba(234,179,8,0.3)] scale-[1.02]"; overlay = `<div class="absolute bottom-1 md:bottom-2 bg-yellow-900/90 px-2 py-0.5 rounded text-[9px] md:text-xs text-yellow-100 border border-yellow-500/50 tracking-widest z-20 drop-shadow-md">DECIDER</div>`; }
+            return `<div onclick="handleMapClick(event, '${map}')" class="${bClass}"><div class="absolute inset-0 bg-cover bg-center opacity-30 grayscale mix-blend-luminosity transition-all duration-300 group-hover:opacity-60 group-hover:grayscale-0" style="background-image: url('${MAP_IMAGES[map]}');"></div><div class="absolute inset-0 bg-slate-950/50"></div>${stepNum}<span class="z-10 drop-shadow-[0_3px_3px_rgba(0,0,0,1)]">${map}</span>${overlay}</div>`;
+        }).join('');
+    }
+
+    function generatePairings(poolTeams, poolKey, label) {
+        let pairings = [];
+        let teamsToPair = [...poolTeams];
+        while (teamsToPair.length > 1) {
+            const teamA = teamsToPair.shift();
+            let oppIndex = -1;
+            
+            let pref = Math.floor(teamsToPair.length / 2);
+            for(let offset = 0; offset <= teamsToPair.length; offset++) {
+                if (pref + offset < teamsToPair.length && !teamA.history.includes(teamsToPair[pref + offset].id)) { oppIndex = pref + offset; break; }
+                if (pref - offset >= 0 && !teamA.history.includes(teamsToPair[pref - offset].id)) { oppIndex = pref - offset; break; }
+            }
+            if (oppIndex === -1) oppIndex = 0; 
+            
+            const opponent = teamsToPair.splice(oppIndex, 1)[0];
+            pairings.push({
+                id: 'match_' + Date.now() + Math.random(),
+                t1: teamA, t2: opponent, winnerId: null, scoreT1: 0, scoreT2: 0,
+                type: 'swiss', phase: 'swiss', pool: poolKey, label: label
+            });
+        }
+        return pairings;
+    }
+
+    function resolveSwingTeams() {
+        const realTeams = getSortedTeams().filter(t => !t.isSwing);
+        realTeams.forEach((t, i) => {
+            if (i < 5) t.status = 'qualified';
+            else if (i < 10) t.status = 'league';
+            else t.status = 'eliminated';
+        });
+        teams.filter(t => t.isSwing).forEach(t => t.status = 'eliminated_swing');
+    }
+
+    function advanceTournament() {
+        if(!isAdmin) return;
+        preserveInputs();
+        
+        if (tournamentFormat === 'standard') {
+            if (phase === 'swiss') {
+                if (teams.length === 0) return;
+                const qualifiedTeams = teams.filter(t => t.status === 'qualified');
+                const activeTeams = teams.filter(t => t.status === 'active');
+                
+                if (activeTeams.length === 0 && qualifiedTeams.length === 8) {
+                    phase = 'playoffs'; viewPhase = 'playoffs';
+                    const qTeams = getSortedTeams().filter(t => t.status === 'qualified');
+                    playoffMatches.qf = [createPlayoffMatch(qTeams[0], qTeams[7], 'Quarterfinal 1'), createPlayoffMatch(qTeams[3], qTeams[4], 'Quarterfinal 2'), createPlayoffMatch(qTeams[1], qTeams[6], 'Quarterfinal 3'), createPlayoffMatch(qTeams[2], qTeams[5], 'Quarterfinal 4')];
+                } else {
+                    if (matches.some(m => m.type === 'swiss' && m.label === `Swiss Round ${currentRound}` && !m.winnerId)) {
+                        alert("Finish all active matches before starting the next round."); return;
+                    }
+                    if (activeTeams.length % 2 !== 0) return;
+                    
+                    currentRound++;
+                    const sortedActive = getSortedTeams().filter(t => t.status === 'active');
+                    
+                    const pools = {};
+                    sortedActive.forEach(t => {
+                        const poolKey = `${t.wins}-${t.losses}`;
+                        if (!pools[poolKey]) pools[poolKey] = [];
+                        pools[poolKey].push(t);
+                    });
+
+                    const newPairings = [];
+                    for (const poolKey in pools) {
+                        newPairings.push(...generatePairings(pools[poolKey], poolKey, `Swiss Round ${currentRound}`));
+                    }
+                    matches = [...matches, ...newPairings];
+                }
+            } else {
+                const qf = playoffMatches.qf || [];
+                const sf = playoffMatches.sf || [];
+                if (qf.length === 4 && qf.every(m => m && m.winnerId) && sf.length === 0) {
+                    const w = qf.map(m => teams.find(t => t.id === m.winnerId));
+                    playoffMatches.sf = [createPlayoffMatch(w[0], w[1], 'Semifinal 1'), createPlayoffMatch(w[2], w[3], 'Semifinal 2')];
+                } 
+                else if (sf.length === 2 && sf.every(m => m && m.winnerId) && !playoffMatches.final) {
+                    const m1 = sf[0], m2 = sf[1];
+                    const f1 = teams.find(t => t.id === m1.winnerId), f2 = teams.find(t => t.id === m2.winnerId);
+                    const l1 = teams.find(t => t.id === (m1.winnerId === m1.t1.id ? m1.t2.id : m1.t1.id)), l2 = teams.find(t => t.id === (m2.winnerId === m2.t1.id ? m2.t2.id : m2.t1.id));
+                    playoffMatches.final = createPlayoffMatch(f1, f2, 'Grand Final');
+                    playoffMatches.third = createPlayoffMatch(l1, l2, '3rd Place Match');
+                }
+            }
+        } else if (tournamentFormat === 'modified') {
+            if (phase === 'swiss') {
+                if (teams.length === 0) return;
+                if (matches.some(m => m.phase === 'swiss' && m.label === `Swiss Round ${currentRound}` && !m.winnerId)) {
+                    alert("Finish all active matches before advancing."); return;
+                }
+
+                if (currentRound === 0) {
+                    currentRound = 1;
+                    const allT = getSortedTeams();
+                    matches = [...matches, ...generatePairings(allT, '0-0', 'Swiss Round 1')];
+                } else if (currentRound === 1) {
+                    currentRound = 2;
+                    const w1 = getSortedTeams().filter(t => t.wins === 1);
+                    const l1 = getSortedTeams().filter(t => t.losses === 1);
+                    matches = [...matches, ...generatePairings(w1, '1-0', 'Swiss Round 2'), ...generatePairings(l1, '0-1', 'Swiss Round 2')];
+                } else if (currentRound === 2) {
+                    currentRound = 3;
+                    const tied = getSortedTeams().filter(t => t.wins === 1 && t.losses === 1);
+                    matches = [...matches, ...generatePairings(tied, '1-1', 'Swiss Round 3')];
+                } else if (currentRound === 3) {
+                    resolveSwingTeams();
+                    phase = 'league'; viewPhase = 'league';
+                    
+                    const pTeams = getSortedTeams().filter(t => t.status === 'league');
+                    pTeams.forEach((t, i) => t.playinSeed = i + 1); 
+
+                    matches.push({
+                        id: 'playin_M1_' + Date.now(), t1: pTeams[3], t2: pTeams[4], winnerId: null, scoreT1: 0, scoreT2: 0,
+                        phase: 'league', type: 'league', label: 'Match 1 (Elim)', playinId: 'M1'
+                    });
+                    matches.push({
+                        id: 'playin_M3_' + Date.now(), t1: pTeams[1], t2: pTeams[2], winnerId: null, scoreT1: 0, scoreT2: 0,
+                        phase: 'league', type: 'league', label: 'Match 3 (Qual)', playinId: 'M3'
+                    });
+                }
+            } else if (phase === 'league') {
+                const m1 = matches.find(m => m.playinId === 'M1');
+                const m2 = matches.find(m => m.playinId === 'M2');
+                const m3 = matches.find(m => m.playinId === 'M3');
+                const m4 = matches.find(m => m.playinId === 'M4');
+
+                if (m1 && m1.winnerId && !m2) {
+                    const seed1 = teams.find(t => t.playinSeed === 1);
+                    const m1Winner = teams.find(t => t.id === m1.winnerId);
+                    matches.push({
+                        id: 'playin_M2_' + Date.now(), t1: seed1, t2: m1Winner, winnerId: null, scoreT1: 0, scoreT2: 0,
+                        phase: 'league', type: 'league', label: 'Match 2 (Qual)', playinId: 'M2'
+                    });
+                    commitState(); return;
+                }
+
+                if (m2 && m2.winnerId && m3 && m3.winnerId && !m4) {
+                    const m2Loser = teams.find(t => t.id === (m2.winnerId === m2.t1.id ? m2.t2.id : m2.t1.id));
+                    const m3Loser = teams.find(t => t.id === (m3.winnerId === m3.t1.id ? m3.t2.id : m3.t1.id));
+                    matches.push({
+                        id: 'playin_M4_' + Date.now(), t1: m2Loser, t2: m3Loser, winnerId: null, scoreT1: 0, scoreT2: 0,
+                        phase: 'league', type: 'league', label: 'Match 4 (Last Chance)', playinId: 'M4'
+                    });
+                    commitState(); return;
+                }
+
+                if (m4 && m4.winnerId) {
+                    const m2Winner = teams.find(t => t.id === m2.winnerId);
+                    const m3Winner = teams.find(t => t.id === m3.winnerId);
+                    const m4Winner = teams.find(t => t.id === m4.winnerId);
+
+                    m2Winner.status = 'qualified_league'; m2Winner.leagueRank = 1;
+                    m3Winner.status = 'qualified_league'; m3Winner.leagueRank = 2;
+                    m4Winner.status = 'qualified_league'; m4Winner.leagueRank = 3;
+
+                    const m1Loser = teams.find(t => t.id === (m1.winnerId === m1.t1.id ? m1.t2.id : m1.t1.id));
+                    const m4Loser = teams.find(t => t.id === (m4.winnerId === m4.t1.id ? m4.t2.id : m4.t1.id));
+                    m1Loser.status = 'eliminated_league';
+                    m4Loser.status = 'eliminated_league';
+
+                    phase = 'playoffs'; viewPhase = 'playoffs';
+                    const qTeams = getSortedTeams().filter(t => t.status === 'qualified'); 
+                    
+                    playoffMatches.qf = [
+                        createPlayoffMatch(qTeams[0], m4Winner, 'Quarterfinal 1'),
+                        createPlayoffMatch(qTeams[2], m2Winner, 'Quarterfinal 2'),
+                        createPlayoffMatch(qTeams[3], qTeams[4], 'Quarterfinal 3'),
+                        createPlayoffMatch(qTeams[1], m3Winner, 'Quarterfinal 4')
+                    ];
+                    commitState(); return;
+                }
+                alert("Finish all active Prove It matches before advancing."); return;
+            } else {
+                const qf = playoffMatches.qf || [];
+                const sf = playoffMatches.sf || [];
+                if (qf.length === 4 && qf.every(m => m && m.winnerId) && sf.length === 0) {
+                    const w = qf.map(m => teams.find(t => t.id === m.winnerId));
+                    playoffMatches.sf = [createPlayoffMatch(w[0], w[1], 'Semifinal 1'), createPlayoffMatch(w[2], w[3], 'Semifinal 2')];
+                } 
+                else if (sf.length === 2 && sf.every(m => m && m.winnerId) && !playoffMatches.final) {
+                    const m1 = sf[0], m2 = sf[1];
+                    const f1 = teams.find(t => t.id === m1.winnerId), f2 = teams.find(t => t.id === m2.winnerId);
+                    const l1 = teams.find(t => t.id === (m1.winnerId === m1.t1.id ? m1.t2.id : m1.t1.id)), l2 = teams.find(t => t.id === (m2.winnerId === m2.t1.id ? m2.t2.id : m2.t1.id));
+                    playoffMatches.final = createPlayoffMatch(f1, f2, 'Grand Final');
+                    playoffMatches.third = createPlayoffMatch(l1, l2, '3rd Place Match');
+                }
+            }
+        }
+        commitState();
+    }
+
+    function createPlayoffMatch(t1, t2, label) { return { id: 'p_' + Date.now() + '_' + Math.floor(Math.random() * 10000), t1, t2, winnerId: null, scoreT1: 0, scoreT2: 0, label, type: 'playoff', phase: 'playoffs' }; }
+
+    function processMatchResult(matchId, displayScoreT1, displayScoreT2) {
+        let match = getMatchById(matchId);
+        if (!match || match.winnerId) return;
+        match.winnerId = displayScoreT1 > displayScoreT2 ? match.t1.id : match.t2.id;
+        match.scoreT1 = displayScoreT1; match.scoreT2 = displayScoreT2;
+        calculateStats(); 
+    }
+
+    function submitScoreUI(mId) {
+        if(!isAdmin) return;
+        preserveInputs();
+        const m = getMatchById(mId);
+        if (!m.veto || m.veto.history.length < 7) return;
+        const playable = m.veto.history.filter(h => h.action === 'pick' || h.action === 'decider');
+        let t1Wins = 0, t2Wins = 0;
+        let mapScores = [];
+        
+        for (let i = 0; i < playable.length; i++) {
+            if (m.veto.format === 'bo3' && (t1Wins === 2 || t2Wins === 2)) break; 
+            
+            const s1El = document.getElementById(`s1_${mId}_${i}`);
+            const s2El = document.getElementById(`s2_${mId}_${i}`);
+            
+            if (!s1El || !s2El || s1El.value === '' || s2El.value === '') {
+                alert("Please fill in all required map scores!");
+                return;
+            }
+            const s1 = parseInt(s1El.value), s2 = parseInt(s2El.value);
+            if (s1 === s2) {
+                alert("Ties are not allowed in Valorant. Please resolve the match.");
+                return; 
+            }
+            mapScores.push({ map: playable[i].map, s1, s2 });
+            if (s1 > s2) t1Wins++; else t2Wins++;
+        }
+        
+        if (m.veto.format === 'bo1' && t1Wins + t2Wins < 1) return;
+        if (m.veto.format === 'bo3' && t1Wins < 2 && t2Wins < 2) return;
+        
+        m.mapScores = mapScores;
+        const displayS1 = m.veto.format === 'bo1' ? mapScores[0].s1 : t1Wins;
+        const displayS2 = m.veto.format === 'bo1' ? mapScores[0].s2 : t2Wins;
+        
+        processMatchResult(mId, displayS1, displayS2);
+        commitState(); 
+    }
+
+    function autoResolveMatches() {
+        if(!isAdmin) return;
+        let active = [];
+        if (viewPhase === 'swiss') active = matches.filter(m => !m.winnerId && m.label === `Swiss Round ${currentRound}`);
+        else if (viewPhase === 'league') active = matches.filter(m => m.phase === 'league' && !m.winnerId);
+        else if (viewPhase === 'playoffs') active = [...(playoffMatches.qf||[]), ...(playoffMatches.sf||[]), playoffMatches.final, playoffMatches.third].filter(m => m && !m.winnerId);
+        
+        if (active.length === 0) {
+            alert("No active matches in this view to resolve!");
+            return;
+        }
+
+        active.forEach(m => {
+            let isBo3 = phase === 'playoffs' || phase === 'league' || (m.pool && m.pool.includes('2')) ? true : Math.random() > 0.5;
+            if (!m.veto || m.veto.history.length < 7) {
+                m.veto = { format: isBo3 ? 'bo3' : 'bo1', history: [] };
+                let availableMaps = [...VALORANT_MAPS].sort(() => Math.random() - 0.5);
+                VETO_STEPS[m.veto.format].forEach(step => { m.veto.history.push({ map: availableMaps.shift(), action: step.action, by: step.by === 'auto' ? 'auto' : (step.by === 't1' ? m.t1.id : m.t2.id) }); });
+            }
+            const playable = m.veto.history.filter(h => h.action === 'pick' || h.action === 'decider');
+            let t1W = 0, t2W = 0, mScores = [];
+            for (let i = 0; i < playable.length; i++) {
+                if (m.veto.format === 'bo3' && (t1W === 2 || t2W === 2)) break;
+                let s1 = Math.random() > 0.5 ? 13 : Math.floor(Math.random() * 12);
+                let s2 = s1 === 13 ? Math.floor(Math.random() * 12) : 13;
+                if (Math.random() > 0.95) { s1 = 15; s2 = 13; }
+                mScores.push({ map: playable[i].map, s1, s2 });
+                if (s1 > s2) t1W++; else t2W++;
+            }
+            m.mapScores = mScores;
+            const displayS1 = m.veto.format === 'bo1' ? mScores[0].s1 : t1W;
+            const displayS2 = m.veto.format === 'bo1' ? mScores[0].s2 : t2W;
+            
+            m.winnerId = displayS1 > displayS2 ? m.t1.id : m.t2.id;
+            m.scoreT1 = displayS1; m.scoreT2 = displayS2;
+        });
+        
+        calculateStats(); 
+        commitState(); 
+    }
+
+    function generateTooltip(m, prefix = '', col = null) {
+        if (!m || !m.winnerId || !m.mapScores || m.mapScores.length === 0) return '';
+        
+        let alignClass = '';
+        if (viewPhase === 'playoffs') {
+            if (m.label === 'Grand Final' || m.label === '3rd Place Match' || m.label.includes('Semifinal')) alignClass = 'tooltip-left';
+            else if (m.label.includes('Quarterfinal')) alignClass = 'tooltip-right';
+        } else if (viewPhase === 'league') {
+            if (col === 1) alignClass = 'tooltip-right';
+            else if (col === 2) alignClass = 'tooltip-left';
+        } else {
+            if (col === 1) alignClass = 'tooltip-right';  
+            else if (col === 6 || col === 4) alignClass = 'tooltip-left';
+        }
+
+        const mList = m.mapScores.map((ms, i) => `<div class="flex justify-between items-center gap-6 px-1 py-1.5 whitespace-nowrap border-b border-slate-700/50 last:border-0"><span class="text-slate-400 font-bold uppercase text-[9px] md:text-[11px] w-12 text-left">Map ${i+1}</span><span class="text-white font-black uppercase text-[10px] md:text-xs flex-1 text-center px-2">${ms.map}</span><span class="font-mono text-emerald-400 font-black text-[11px] md:text-sm w-12 text-right">${ms.s1} - ${ms.s2}</span></div>`).join('');
+        return `<div id="tooltip_${prefix}${m.id}" class="map-tooltip ${alignClass}"><div class="text-[9px] md:text-[10px] font-black text-emerald-400 border-b border-slate-700 pb-2 mb-2 flex justify-between items-center tracking-widest uppercase shadow-md"><span>Match Summary</span><button type="button" onclick="toggleTooltip(event, '${prefix}${m.id}')" class="close-btn text-slate-500 hover:text-red-400 ml-4 px-1 rounded bg-slate-800 transition-colors pointer-events-auto">✕</button></div><div class="flex flex-col">${mList}</div></div>`;
+    }
+
+    function render() {
+        document.getElementById('mainTourneyTitle').innerText = tournamentName.toUpperCase();
+        document.getElementById('vizTourneyName').innerText = tournamentName.toUpperCase();
+
+        const btn = document.getElementById('mainActionBtn');
+        document.getElementById('vizPhaseTag').innerText = viewPhase === 'swiss' ? "SWISS STAGE" : (viewPhase === 'league' ? "PROVE IT STAGE" : "CHAMPIONS STAGE");
+        
+        if (tournamentFormat === 'modified') {
+            document.getElementById('viewToggle').classList.remove('hidden');
+            document.getElementById('btnViewLeague').classList.remove('hidden');
+            
+            document.getElementById('btnViewSwiss').className = viewPhase === 'swiss' ? 'px-3 md:px-4 py-1 bg-blue-600 rounded text-white font-bold text-[10px] md:text-xs shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'px-3 md:px-4 py-1 hover:bg-slate-700 rounded text-slate-400 font-bold text-[10px] md:text-xs transition-all';
+            document.getElementById('btnViewLeague').className = viewPhase === 'league' ? 'px-3 md:px-4 py-1 bg-blue-600 rounded text-white font-bold text-[10px] md:text-xs shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'px-3 md:px-4 py-1 hover:bg-slate-700 rounded text-slate-400 font-bold text-[10px] md:text-xs transition-all';
+            document.getElementById('btnViewPlayoffs').className = viewPhase === 'playoffs' ? 'px-3 md:px-4 py-1 bg-blue-600 rounded text-white font-bold text-[10px] md:text-xs shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'px-3 md:px-4 py-1 hover:bg-slate-700 rounded text-slate-400 font-bold text-[10px] md:text-xs transition-all';
+        } else {
+            if (phase === 'playoffs') {
+                document.getElementById('viewToggle').classList.remove('hidden');
+                document.getElementById('btnViewSwiss').className = viewPhase === 'swiss' ? 'px-3 md:px-4 py-1 bg-blue-600 rounded text-white font-bold text-[10px] md:text-xs shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'px-3 md:px-4 py-1 hover:bg-slate-700 rounded text-slate-400 font-bold text-[10px] md:text-xs transition-all';
+                document.getElementById('btnViewPlayoffs').className = viewPhase === 'playoffs' ? 'px-3 md:px-4 py-1 bg-blue-600 rounded text-white font-bold text-[10px] md:text-xs shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'px-3 md:px-4 py-1 hover:bg-slate-700 rounded text-slate-400 font-bold text-[10px] md:text-xs transition-all';
+            } else {
+                document.getElementById('viewToggle').classList.add('hidden');
+            }
+        }
+
+        if (phase === 'swiss') {
+            document.getElementById('phaseTag').innerText = "Swiss Stage";
+            document.getElementById('roundDisplay').innerText = currentRound === 0 ? "Setup Phase" : `Round ${currentRound}`;
+            const activeTeams = teams.filter(t => t.status === 'active');
+            
+            if (tournamentFormat === 'modified' && currentRound === 3 && activeTeams.length > 0 && matches.filter(m => m.phase === 'swiss' && !m.winnerId).length === 0) {
+                btn.innerText = "START PROVE IT STAGE"; btn.className = "admin-only bg-blue-600 hover:bg-blue-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(37,99,235,0.4)] text-sm md:text-base w-full sm:w-auto";
+            } else if (tournamentFormat === 'standard' && activeTeams.length === 0 && teams.length > 0) { 
+                btn.innerText = "START CHAMPIONS STAGE"; btn.className = "admin-only bg-yellow-600 hover:bg-yellow-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(202,138,4,0.4)] text-sm md:text-base w-full sm:w-auto"; 
+            } else { 
+                btn.innerText = "START NEXT ROUND"; btn.className = "admin-only bg-emerald-600 hover:bg-emerald-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(16,185,129,0.4)] text-sm md:text-base w-full sm:w-auto";
+            }
+        } else if (phase === 'league') {
+            document.getElementById('phaseTag').innerText = "Prove It Stage";
+            document.getElementById('roundDisplay').innerText = "Play-In Bracket";
+            const m4 = matches.find(m => m.playinId === 'M4');
+            if (m4 && m4.winnerId) {
+                btn.innerText = "START CHAMPIONS STAGE"; btn.className = "admin-only bg-yellow-600 hover:bg-yellow-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(202,138,4,0.4)] text-sm md:text-base w-full sm:w-auto";
+            } else {
+                btn.innerText = "ADVANCE BRACKET"; btn.className = "admin-only bg-blue-600 hover:bg-blue-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(37,99,235,0.4)] text-sm md:text-base w-full sm:w-auto";
+            }
+        } else {
+            document.getElementById('phaseTag').innerText = "Champions Stage";
+            document.getElementById('phaseTag').className = "text-[10px] md:text-xs font-bold uppercase tracking-widest text-yellow-500";
+            document.getElementById('roundDisplay').innerText = "Knockout Playoffs";
+            btn.innerText = "ADVANCE BRACKET"; btn.className = "admin-only bg-yellow-600 hover:bg-yellow-500 px-4 md:px-8 py-2 md:py-3 rounded-xl font-bold text-white shadow-[0_0_20px_rgba(202,138,4,0.4)] text-sm md:text-base w-full sm:w-auto";
+        }
+        
+        renderStandings(); 
+        renderMatches(); 
+        renderVisualizer();
+    }
+
+    function renderStandings() {
+        document.getElementById('standingsList').innerHTML = getSortedTeams().map((t, i) => {
+            if (t.isSwing && phase !== 'swiss' && currentRound > 0) return ''; 
+            
+            const mmrObj = t.players && t.players.length ? calculateStackMMR(t.players.map(p => p.rank)) : {mmr: t.initialSeed, predicted: "Unknown"};
+            let rosterHtml = t.players && t.players.length ? t.players.map(p => `<div class="flex items-center justify-between gap-3 py-1 border-b border-slate-700/50 last:border-0"><span class="text-xs text-slate-300 font-medium truncate w-24">${p.name}</span><div class="flex items-center gap-1.5 w-24 justify-end"><span class="text-[9px] font-bold text-slate-400 uppercase tracking-wide">${p.rank}</span><img src="${getRankImg(RANK_DATA[p.rank].id)}" class="w-4 h-4" alt="${p.rank}"></div></div>`).join('') : `<div class="text-xs text-slate-500 italic">Roster data unavailable</div>`;
+            
+            let sClass = 'border-transparent';
+            if (t.isSwing) sClass = 'swing-team-row border-amber-500';
+            else if (t.status === 'qualified' || t.status === 'qualified_league') sClass = 'qualified border-emerald-500';
+            else if (t.status === 'league') sClass = 'league-team border-blue-500';
+            else if (t.status.includes('eliminated')) sClass = 'eliminated border-red-500';
+
+            const swingTag = t.isSwing ? `<span class="swing-tag">Swing</span>` : '';
+            const tTagDisplay = `<span class="text-[9px] md:text-[10px] font-mono text-slate-500 ml-1">[${(t.tag || t.name.substring(0,3)).toUpperCase()}]</span>`;
+
+            return `<div class="standings-row relative group flex flex-col p-2 md:p-3 border-l-2 ${sClass} hover:bg-slate-800/80 cursor-default transition-colors"><div class="flex items-center justify-between w-full"><div class="flex items-center gap-2 md:gap-3 overflow-hidden"><span class="font-mono text-slate-500 text-[10px] md:text-xs w-3 md:w-4">${i + 1}.</span><div><p class="font-bold text-xs md:text-sm truncate ${t.isSwing ? 'text-amber-300' : (t.status.includes('qualified') ? 'text-emerald-400' : (t.status === 'league' ? 'text-blue-400' : ''))}">${t.name}${tTagDisplay}${swingTag}</p><div class="flex items-center gap-1 mt-0.5">${mmrObj.predicted !== 'Unknown' ? `<img src="${getRankImg(RANK_DATA[mmrObj.predicted].id)}" class="w-3 h-3 md:w-3.5 md:h-3.5 object-contain" alt="">` : ''}<p class="text-[9px] md:text-[10px] text-slate-400 font-medium truncate">Avg: ${mmrObj.predicted}</p></div></div></div><div class="text-right shrink-0 ml-1 md:ml-2"><div class="font-mono font-bold text-xs md:text-sm"><span class="${t.wins>0?'text-emerald-400':'text-slate-400'}">${t.wins}W</span> - <span class="${t.losses>0?'text-red-400':'text-slate-400'}">${t.losses}L</span></div><div class="text-[9px] md:text-[10px] text-slate-400 font-medium">Diff: <span class="${t.roundDiff>0?'text-emerald-500':(t.roundDiff<0?'text-red-500':'')}">${t.roundDiff>0?'+':''}${t.roundDiff}</span></div></div></div>
+            <div class="team-roster-panel hidden group-hover:block mt-3 pt-2 border-t border-slate-700/50 w-full animate-fadeIn"><div class="text-[9px] font-black ${t.isSwing ? 'text-amber-400' : 'text-blue-400'} pb-1 flex justify-between items-center tracking-widest uppercase border-b border-slate-700/50 mb-2"><span>Roster</span><span class="text-[8px] ${t.isSwing ? 'bg-amber-900/50 text-amber-300 border-amber-500/30' : 'bg-blue-900/30 text-blue-300 border-blue-500/30'} px-1.5 py-0.5 rounded border shrink-0">MMR: ${mmrObj.mmr}</span></div><div class="flex flex-col gap-1">${rosterHtml}</div></div></div>`;
+        }).join('');
+    }
+
+    function renderMatches() {
+        const grid = document.getElementById('matchGrid');
+        if (viewPhase === 'swiss') {
+            const activeMatches = matches.filter(m => !m.winnerId && m.label === `Swiss Round ${currentRound}`);
+            grid.innerHTML = activeMatches.length ? activeMatches.map(m => generateMatchCardHTML(m)).join('') : (teams.length ? `<div class="col-span-full p-8 md:p-12 text-center border-2 border-dashed border-slate-700/50 rounded-2xl md:rounded-3xl bg-slate-900/30 text-slate-400 text-sm md:text-base">All matches in this round complete.</div>` : `<div class="col-span-full p-8 md:p-12 text-center border-2 border-dashed border-slate-700/50 rounded-2xl md:rounded-3xl bg-slate-900/30 text-slate-400 text-sm md:text-base">Awaiting Teams</div>`);
+        } else if (viewPhase === 'league') {
+            const activeMatches = matches.filter(m => m.phase === 'league' && !m.winnerId);
+            grid.innerHTML = activeMatches.length ? activeMatches.map(m => generateMatchCardHTML(m)).join('') : (matches.some(m => m.phase === 'league') ? `<div class="col-span-full p-8 md:p-12 text-center border-2 border-dashed border-slate-700/50 rounded-2xl md:rounded-3xl bg-slate-900/30 text-slate-400 text-sm md:text-base">All Prove It matches complete.</div>` : `<div class="col-span-full p-8 md:p-12 text-center border-2 border-dashed border-slate-700/50 rounded-2xl md:rounded-3xl bg-slate-900/30 text-slate-400 text-sm md:text-base">Play-In not started yet.</div>`);
+        } else {
+            const qfHtml = playoffMatches.qf && playoffMatches.qf.length > 0 ? renderPlayoffTier('Quarterfinals', playoffMatches.qf) : '';
+            const sfHtml = playoffMatches.sf && playoffMatches.sf.length > 0 ? renderPlayoffTier('Semifinals', playoffMatches.sf) : '';
+            const finalHtml = playoffMatches.final ? renderPlayoffTier('Finals', [playoffMatches.final, playoffMatches.third]) : '';
+            grid.innerHTML = `<div class="col-span-full space-y-4 md:space-y-6">${qfHtml}${sfHtml}${finalHtml}</div>`;
+        }
+    }
+
+    function renderPlayoffTier(title, matchArray) {
+        if (!matchArray || !matchArray.length) return '';
+        return `<h3 class="text-base md:text-lg font-black text-yellow-500 uppercase tracking-widest border-b border-slate-800 pb-1.5 md:pb-2 mb-3 md:mb-4">${title}</h3><div class="grid grid-cols-1 xl:grid-cols-2 gap-3 md:gap-4">` + matchArray.map(m => generateMatchCardHTML(m, true)).join('') + `</div>`;
+    }
+
+    function generateMatchCardHTML(m, isPlayoff = false) {
+        if (!m || !m.t1 || !m.t2) return `<div class="col-span-1 p-6 md:p-8 text-center border-2 border-dashed border-slate-700/50 rounded-xl shadow-lg bg-slate-900/30 text-slate-500 font-bold uppercase tracking-widest">TBD</div>`;
+
+        let accent = isPlayoff ? 'from-yellow-600 to-orange-500' : (m.phase === 'league' ? 'from-blue-600 to-purple-500' : 'from-blue-500 to-emerald-500');
+        if (m.t1.isSwing || m.t2.isSwing) accent = 'from-amber-600 to-yellow-400';
+
+        let vetoUI = '';
+        if (m.veto && m.veto.history.length === 7) {
+            let pickCount = 1;
+            const picks = m.veto.history.filter(h => h.action === 'pick' || h.action === 'decider');
+            vetoUI = `<div class="mt-2 flex gap-1 justify-center flex-wrap">` + picks.map(p => { const isDec = p.action === 'decider'; const color = isDec ? 'text-yellow-400 border-yellow-500/50 bg-yellow-900/20' : 'text-emerald-400 border-emerald-500/50 bg-emerald-900/20'; const prefix = isDec ? (m.veto.format === 'bo1' ? 'MAP' : 'DEC') : `M${pickCount++}`; return `<span class="text-[8px] md:text-[9px] font-bold px-1.5 py-0.5 rounded border flex items-center gap-1 ${color}"><span class="opacity-70">${prefix}</span> ${p.map.toUpperCase()}</span>`; }).join('') + `</div>`;
+        } else if (m.veto && m.veto.history.length > 0) {
+            vetoUI = `<div class="mt-2 text-[8px] md:text-[9px] text-center text-slate-500 uppercase font-bold tracking-widest">Veto in progress...</div>`;
+        }
+
+        let controlUI = '';
+        if (m.winnerId) {
+            controlUI = `<div class="flex items-center gap-2 md:gap-3 cursor-pointer hover:bg-slate-800/80 p-2 rounded-lg transition-colors" onclick="toggleTooltip(event, 'grid_${m.id}')" title="Click to pin map scores"><span class="text-2xl md:text-3xl font-black ${m.winnerId===m.t1.id?'text-emerald-400':'text-slate-500'}">${m.scoreT1}</span><span class="text-slate-600 font-bold">-</span><span class="text-2xl md:text-3xl font-black ${m.winnerId===m.t2.id?'text-emerald-400':'text-slate-500'}">${m.scoreT2}</span></div><div class="mt-1 md:mt-2 text-[9px] md:text-[10px] text-slate-500 uppercase font-bold bg-slate-950/50 px-3 py-1.5 rounded shadow-inner cursor-pointer hover:text-white transition-colors" onclick="toggleTooltip(event, 'grid_${m.id}')">Map Results</div>`;
+        } else if (m.veto && m.veto.history.length === 7) {
+            const playable = m.veto.history.filter(h => h.action === 'pick' || h.action === 'decider');
+            const inputs = playable.map((p, idx) => `<div class="flex items-center justify-between gap-1 md:gap-2 w-full text-[9px] md:text-[10px] mb-1 md:mb-2"><span class="text-slate-400 w-10 md:w-16 truncate uppercase font-bold" title="${p.map}">${p.map}</span><input id="s1_${m.id}_${idx}" type="number" min="0" value="${m['tempS1_'+idx] !== undefined ? m['tempS1_'+idx] : ''}" class="admin-only w-12 md:w-16 bg-slate-800 border border-slate-600 rounded text-center py-2 text-sm md:text-base font-black outline-none appearance-none focus:border-blue-500 transition-colors shadow-inner text-white"><span class="text-slate-600 font-bold">:</span><input id="s2_${m.id}_${idx}" type="number" min="0" value="${m['tempS2_'+idx] !== undefined ? m['tempS2_'+idx] : ''}" class="admin-only w-12 md:w-16 bg-slate-800 border border-slate-600 rounded text-center py-2 text-sm md:text-base font-black outline-none appearance-none focus:border-blue-500 transition-colors shadow-inner text-white"></div>`).join('');
+            controlUI = `<div class="flex flex-col w-full px-1">${inputs}</div><button type="button" onclick="submitScoreUI('${m.id}')" class="admin-only mt-2 md:mt-3 bg-emerald-700 hover:bg-emerald-600 text-[10px] md:text-[11px] font-bold px-4 py-2 md:py-2.5 rounded transition-colors w-full border border-emerald-600 uppercase shadow-lg text-white">Submit Match</button>`;
+        } else {
+            controlUI = `<div class="text-[10px] md:text-[11px] text-slate-400 text-center mb-2 md:mb-3 italic">Veto Required</div><button type="button" onclick="openVetoModal('${m.id}')" class="admin-only bg-blue-600 hover:bg-blue-500 text-[11px] md:text-[12px] font-bold text-white px-4 py-2 md:py-2.5 rounded transition-colors border border-blue-500 uppercase shadow-lg w-full">Start Veto</button>`;
+        }
+
+        const t1Swing = m.t1.isSwing ? `<span class="text-amber-400 text-[8px] font-black uppercase ml-1">(Swing)</span>` : '';
+        const t2Swing = m.t2.isSwing ? `<span class="text-amber-400 text-[8px] font-black uppercase mr-1">(Swing)</span>` : '';
+
+        return `<div class="glass-panel border ${m.t1.isSwing || m.t2.isSwing ? 'border-amber-700/50' : (m.winnerId?'border-slate-800 opacity-70':'border-slate-700 hover:border-slate-500')} p-3 md:p-5 rounded-xl shadow-xl relative overflow-visible group"><div class="absolute top-0 left-0 w-full h-1 rounded-t-xl bg-gradient-to-r ${accent} opacity-75"></div><div class="text-[9px] md:text-[11px] text-center text-slate-400 font-bold mb-3 md:mb-4 uppercase tracking-widest">${m.label}</div><div class="flex items-center justify-between gap-3 md:gap-6 flex-wrap md:flex-nowrap"><div class="w-full md:flex-1 text-center md:text-right truncate font-bold text-base md:text-lg ${m.t1.isSwing ? 'text-amber-300' : (m.winnerId===m.t1.id?'text-white':'text-slate-400')}">${m.t1.name}${t1Swing} <span class="text-[9px] md:text-[10px] text-slate-500 font-mono hidden md:inline ml-2">${(m.t1.tag || m.t1.name.substring(0,3)).toUpperCase()}</span></div><div class="flex flex-col items-center shrink-0 w-full md:w-52 order-last md:order-none mt-2 md:mt-0">${controlUI}</div><div class="w-full md:flex-1 text-center md:text-left truncate font-bold text-base md:text-lg ${m.t2.isSwing ? 'text-amber-300' : (m.winnerId===m.t2.id?'text-white':'text-slate-400')}"><span class="text-[9px] md:text-[10px] text-slate-500 font-mono hidden md:inline mr-2">${(m.t2.tag || m.t2.name.substring(0,3)).toUpperCase()}</span> ${t2Swing}${m.t2.name}</div></div>${generateTooltip(m, 'grid_')}</div>`;
+    }
+
+    function getPos(col, row, isModified = false, layout = 'swiss') { 
+        if (layout === 'league') {
+            return { x: `${(col - 0.5) * (100 / 4)}%`, y: `${(row - 0.5) * (100 / 5)}%` };
+        } else if (layout === 'playoffs') {
+            return { x: `${(col - 0.5) * (100 / 4)}%`, y: `${(row - 0.5) * (100 / 8)}%` };
+        }
+        
+        if (isModified) {
+            return { x: `${(col - 0.5) * (100 / 4)}%`, y: `${(row - 0.5) * (100 / 5)}%` }; 
+        }
+        return { x: `${(col - 0.5) * (100 / 6)}%`, y: `${(row - 0.5) * (100 / 7)}%` }; 
+    }
+
+    function renderVisualizer() {
+        const vc = document.getElementById('visualizerContainer');
+        if (teams.length === 0) { vc.innerHTML = `<div class="m-auto text-slate-500 italic font-medium text-sm tracking-wide">Awaiting Tournament Data...</div>`; return; }
+        
+        if (viewPhase === 'swiss') {
+            let vizRound = currentRound;
+            const activeSwissMatches = matches.filter(m => m.type === 'swiss' && !m.winnerId);
+            if (currentRound > 0 && activeSwissMatches.length === 0) vizRound = currentRound + 1; 
+            
+            const isMod = tournamentFormat === 'modified';
+            let connections = [];
+            if (isMod) {
+                connections = [
+                    {from:[1,3],to:[2,2],win:true}, {from:[1,3],to:[2,4],win:false},
+                    {from:[2,2],to:[3,1],win:true}, {from:[2,2],to:[3,3],win:false},
+                    {from:[2,4],to:[3,3],win:true}, {from:[2,4],to:[3,5],win:false},
+                    {from:[3,3],to:[4,2],win:true}, {from:[3,3],to:[4,4],win:false}
+                ];
+            } else {
+                connections = [
+                    {from:[1,4],to:[2,3],win:true}, {from:[1,4],to:[2,5],win:false},
+                    {from:[2,3],to:[3,2],win:true}, {from:[2,3],to:[3,4],win:false},
+                    {from:[2,5],to:[3,4],win:true}, {from:[2,5],to:[3,6],win:false},
+                    {from:[3,2],to:[4,1],win:true}, {from:[3,2],to:[4,3],win:false},
+                    {from:[3,4],to:[4,3],win:true}, {from:[3,4],to:[4,5],win:false},
+                    {from:[3,6],to:[4,5],win:true}, {from:[3,6],to:[4,7],win:false},
+                    {from:[4,3],to:[5,2],win:true}, {from:[4,3],to:[5,4],win:false},
+                    {from:[4,5],to:[5,4],win:true}, {from:[4,5],to:[5,6],win:false},
+                    {from:[5,4],to:[6,3],win:true}, {from:[5,4],to:[6,5],win:false}
+                ];
+            }
+            
+            let svgLines = `<div class="absolute inset-0 pointer-events-none z-0"><svg class="w-full h-full">`;
+            connections.forEach(c => { if (vizRound >= c.to[0]) { const p1 = getPos(c.from[0], c.from[1], isMod, 'swiss'), p2 = getPos(c.to[0], c.to[1], isMod, 'swiss'); svgLines += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="${c.win ? 'flow-line-win' : 'flow-line-loss'}" />`; }});
+            svgLines += `</svg></div>`;
+
+            let cols = isMod ? 4 : 6;
+            let rows = isMod ? 5 : 7;
+            let html = `<div class="grid gap-x-2 sm:gap-x-5 gap-y-1 sm:gap-y-3 min-w-[750px] sm:min-w-[1000px] h-full min-h-[400px] w-full px-2 relative mx-auto z-10" style="grid-template-columns: repeat(${cols}, 1fr); grid-template-rows: repeat(${rows}, 1fr);">` + svgLines;
+            
+            const getMatches = (poolStr) => matches.filter(m => m.type === 'swiss' && m.pool === poolStr);
+            const getTeams = (w, l) => teams.filter(t => t.wins === w && t.losses === l && !t.isSwing);
+            
+            let blocks = [];
+            if (isMod) {
+                blocks = [
+                    { type: 'match', pool: '0-0', title: '0:0', c: 1, r: 3, color: 'border-[#4b5563] shadow-[0_0_12px_rgba(75,85,99,0.3)] text-slate-300' },
+                    { type: 'match', pool: '1-0', title: '1:0', c: 2, r: 2, color: 'border-[#22c55e] shadow-[0_0_12px_rgba(34,197,94,0.3)] text-[#4ade80]' },
+                    { type: 'match', pool: '0-1', title: '0:1', c: 2, r: 4, color: 'border-[#ef4444] shadow-[0_0_12px_rgba(239,68,68,0.3)] text-[#f87171]' },
+                    { type: 'result', w: 2, l: 0, title: '2:0 Qualified', c: 3, r: 1, color: 'border-[#22c55e] shadow-[0_0_15px_rgba(34,197,94,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                    { type: 'match', pool: '1-1', title: '1:1', c: 3, r: 3, color: 'border-[#eab308] shadow-[0_0_12px_rgba(234,179,8,0.3)] text-[#facc15]' },
+                    { type: 'result', w: 0, l: 2, title: '0:2 Eliminated', c: 3, r: 5, color: 'border-[#ef4444] shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' },
+                    { type: 'result', w: 2, l: 1, title: '2:1 League Bound', c: 4, r: 2, color: 'border-[#3b82f6] shadow-[0_0_15px_rgba(59,130,246,0.4)] text-[#60a5fa] bg-[#1e3a8a]/40' },
+                    { type: 'result', w: 1, l: 2, title: '1:2 Eliminated', c: 4, r: 4, color: 'border-[#ef4444] shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' }
+                ];
+            } else {
+                blocks = [
+                    { type: 'match', pool: '0-0', title: '0:0', c: 1, r: 4, color: 'border-[#4b5563] shadow-[0_0_12px_rgba(75,85,99,0.3)] text-slate-300' },
+                    { type: 'match', pool: '1-0', title: '1:0', c: 2, r: 3, color: 'border-[#22c55e] shadow-[0_0_12px_rgba(34,197,94,0.3)] text-[#4ade80]' },
+                    { type: 'match', pool: '0-1', title: '0:1', c: 2, r: 5, color: 'border-[#ef4444] shadow-[0_0_12px_rgba(239,68,68,0.3)] text-[#f87171]' },
+                    { type: 'match', pool: '2-0', title: '2:0', c: 3, r: 2, color: 'border-[#22c55e] shadow-[0_0_12px_rgba(34,197,94,0.3)] text-[#4ade80]' },
+                    { type: 'match', pool: '1-1', title: '1:1', c: 3, r: 4, color: 'border-[#eab308] shadow-[0_0_12px_rgba(234,179,8,0.3)] text-[#facc15]' },
+                    { type: 'match', pool: '0-2', title: '0:2', c: 3, r: 6, color: 'border-[#ef4444] shadow-[0_0_12px_rgba(239,68,68,0.3)] text-[#f87171]' },
+                    { type: 'match', pool: '2-1', title: '2:1', c: 4, r: 3, color: 'border-[#22c55e] shadow-[0_0_12px_rgba(34,197,94,0.3)] text-[#a3e635]' },
+                    { type: 'match', pool: '1-2', title: '1:2', c: 4, r: 5, color: 'border-[#ef4444] shadow-[0_0_12px_rgba(239,68,68,0.3)] text-[#fb923c]' },
+                    { type: 'match', pool: '2-2', title: '2:2', c: 5, r: 4, color: 'border-[#eab308] shadow-[0_0_12px_rgba(234,179,8,0.3)] text-[#facc15]' },
+                    { type: 'result', w: 3, l: 0, title: '3:0 Champion', c: 4, r: 1, color: 'border-[#22c55e] shadow-[0_0_15px_rgba(34,197,94,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                    { type: 'result', w: 3, l: 1, title: '3:1 Champion', c: 5, r: 2, color: 'border-[#22c55e] shadow-[0_0_15px_rgba(34,197,94,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                    { type: 'result', w: 3, l: 2, title: '3:2 Champion', c: 6, r: 3, color: 'border-[#22c55e] shadow-[0_0_15px_rgba(34,197,94,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                    { type: 'result', w: 0, l: 3, title: '0:3 Eliminated', c: 4, r: 7, color: 'border-[#ef4444] shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' },
+                    { type: 'result', w: 1, l: 3, title: '1:3 Eliminated', c: 5, r: 6, color: 'border-[#ef4444] shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' },
+                    { type: 'result', w: 2, l: 3, title: '2:3 Eliminated', c: 6, r: 5, color: 'border-[#ef4444] shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' },
+                ];
+            }
+
+            blocks.forEach(b => {
+                let contentHtml = '';
+                if (b.type === 'match') {
+                    const poolMatches = getMatches(b.pool);
+                    if (poolMatches.length > 0) {
+                        contentHtml = poolMatches.map(m => {
+                            const isPlayed = m.winnerId !== null;
+                            const w1Class = m.t1.isSwing ? 'text-amber-400 font-bold' : (m.winnerId === m.t1.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]'));
+                            const w2Class = m.t2.isSwing ? 'text-amber-400 font-bold' : (m.winnerId === m.t2.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]'));
+                            const scoreClass = isPlayed ? 'text-[#4ade80] font-black' : 'text-[#475569]';
+                            let displayScore = 'vs';
+                            if (isPlayed) { displayScore = m.veto && m.veto.format === 'bo1' ? `${m.mapScores[0].s1}-${m.mapScores[0].s2}` : `${m.scoreT1}-${m.scoreT2}`; }
+                            return `<div class="flex items-center justify-between py-0.5 sm:py-1 lg:py-[6px] px-1 lg:px-2 bg-slate-900/60 rounded mb-1 lg:mb-1.5 border border-slate-700/50 hover:bg-slate-800 transition-colors relative z-10 group ${isPlayed ? 'cursor-pointer' : 'cursor-default'}" ${isPlayed ? `onclick="toggleTooltip(event, 'viz_${m.id}')"` : ''}><span class="w-8 sm:w-10 lg:w-14 truncate text-right text-[8px] sm:text-[10px] lg:text-[12px] ${w1Class}" title="${m.t1.name}">${(m.t1.tag || m.t1.name.substring(0,3)).toUpperCase()}</span><span class="text-[8px] sm:text-[10px] lg:text-[12px] mx-1 lg:mx-2 tracking-widest ${scoreClass}">${displayScore}</span><span class="w-8 sm:w-10 lg:w-14 truncate text-left text-[8px] sm:text-[10px] lg:text-[12px] ${w2Class}" title="${m.t2.name}">${(m.t2.tag || m.t2.name.substring(0,3)).toUpperCase()}</span>${generateTooltip(m, 'viz_', b.c)}</div>`;
+                        }).join('');
+                    } else {
+                        contentHtml = `<div class="text-slate-600 text-[10px] text-center py-1 md:py-2 italic font-medium">TBD</div>`;
+                    }
+                    const formatStr = poolMatches.length > 0 && poolMatches[0].veto ? poolMatches[0].veto.format.toUpperCase() : (b.pool.includes('2') ? 'BO3' : 'BO1');
+                    html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 bg-slate-950/80 backdrop-blur-md flex flex-col ${b.color} relative z-10 overflow-visible shadow-xl" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="flex justify-between items-center px-0.5 sm:px-1 pb-0.5 sm:pb-1 mb-1 lg:mb-2"><span class="text-[7px] sm:text-[9px] lg:text-[11px] font-black uppercase tracking-wider">${b.title}</span><span class="text-[6px] sm:text-[8px] lg:text-[9px] font-bold opacity-60 tracking-wider">${formatStr}</span></div>${contentHtml}</div>`;
+                } else {
+                    let poolTeams = [];
+                    if (isMod) {
+                        if (b.title.includes('League')) {
+                            poolTeams = teams.filter(t => t.status === 'league' || t.status === 'qualified_league' || t.status === 'eliminated_league');
+                        } else if (b.title.includes('Qualified')) {
+                            poolTeams = teams.filter(t => t.status === 'qualified');
+                        } else if (b.title.includes('1:2 Eliminated')) {
+                            poolTeams = teams.filter(t => t.status === 'eliminated' && t.wins > 0);
+                        } else if (b.title.includes('0:2 Eliminated')) {
+                            poolTeams = teams.filter(t => t.status === 'eliminated' && t.wins === 0);
+                        } else {
+                            poolTeams = getTeams(b.w, b.l); 
+                        }
+                    } else {
+                        poolTeams = getTeams(b.w, b.l);
+                    }
+
+                    if (poolTeams.length > 0) {
+                        contentHtml = poolTeams.map(t => `<div class="flex items-center justify-center py-0.5 sm:py-1 lg:py-2 bg-slate-900/80 backdrop-blur rounded mb-1 lg:mb-1.5 border border-slate-700/50 relative z-10"><span class="font-bold text-[8px] sm:text-[11px] lg:text-[13px] text-white tracking-wide truncate px-1 sm:px-2" title="${t.name}">${t.name}</span></div>`).join('');
+                    } else {
+                        contentHtml = `<div class="text-slate-600 text-[10px] text-center py-1 md:py-2 italic font-medium">TBD</div>`;
+                    }
+                    html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 flex flex-col ${b.color} relative z-10 backdrop-blur-md" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="text-[7px] sm:text-[9px] lg:text-[10px] font-bold uppercase tracking-widest text-center pb-0.5 sm:pb-1 mb-1 lg:mb-2">${b.title}</div>${contentHtml}</div>`;
+                }
+            });
+            vc.innerHTML = html + `</div>`;
+        
+        } else if (viewPhase === 'league') {
+            const connections = [
+                {from: [1,2], to: [2,1], win: true},  
+                {from: [1,2], to: [2,5], win: false}, 
+                {from: [2,1], to: [4,1], win: true},  
+                {from: [2,1], to: [3,2], win: false}, 
+                {from: [2,3], to: [4,3], win: true},  
+                {from: [2,3], to: [3,2], win: false}, 
+                {from: [3,2], to: [4,2], win: true},  
+                {from: [3,2], to: [4,4], win: false}  
+            ];
+            
+            let svgLines = `<div class="absolute inset-0 pointer-events-none z-0"><svg class="w-full h-full">`;
+            connections.forEach(c => { 
+                const p1 = getPos(c.from[0], c.from[1], false, 'league');
+                const p2 = getPos(c.to[0], c.to[1], false, 'league');
+                svgLines += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="${c.win ? 'flow-line-win' : 'flow-line-loss'}" />`; 
+            });
+            svgLines += `</svg></div>`;
+
+            let html = `<div class="grid gap-x-2 sm:gap-x-5 gap-y-1 sm:gap-y-3 min-w-[750px] sm:min-w-[1000px] h-full min-h-[400px] w-full px-2 relative mx-auto z-10" style="grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(5, 1fr);">` + svgLines;
+            
+            const getPlayinMatch = (pId) => matches.find(m => m.playinId === pId);
+            const getRanked = (rank) => teams.filter(t => t.leagueRank === rank);
+
+            let blocks = [
+                { type: 'match', pId: 'M1', title: 'Match 1 (Elim)', c: 1, r: 2, color: 'border-orange-500 shadow-[0_0_12px_rgba(249,115,22,0.3)] text-orange-400' },
+                { type: 'match', pId: 'M2', title: 'Match 2 (Qual)', c: 2, r: 1, color: 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.3)] text-blue-400' },
+                { type: 'match', pId: 'M3', title: 'Match 3 (Qual)', c: 2, r: 3, color: 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.3)] text-blue-400' },
+                { type: 'match', pId: 'M4', title: 'Match 4 (Last Chance)', c: 3, r: 2, color: 'border-yellow-500 shadow-[0_0_12px_rgba(234,179,8,0.3)] text-yellow-400' },
+                { type: 'result', label: 'Playoff Seed #1', rank: 1, c: 4, r: 1, color: 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                { type: 'result', label: 'Playoff Seed #3', rank: 3, c: 4, r: 2, color: 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                { type: 'result', label: 'Playoff Seed #2', rank: 2, c: 4, r: 3, color: 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[#4ade80] bg-[#064e3b]/40' },
+                { type: 'result', label: 'Eliminated', matchLossSrc: 'M4', c: 4, r: 4, color: 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' },
+                { type: 'result', label: 'Eliminated', matchLossSrc: 'M1', c: 2, r: 5, color: 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[#f87171] bg-[#7f1d1d]/40' }
+            ];
+
+            blocks.forEach(b => {
+                let contentHtml = '';
+                if (b.type === 'match') {
+                    const m = getPlayinMatch(b.pId);
+                    if (m && m.t1 && m.t2) {
+                        const isPlayed = m.winnerId !== null;
+                        const w1Class = m.winnerId === m.t1.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]');
+                        const w2Class = m.winnerId === m.t2.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]');
+                        const scoreClass = isPlayed ? 'text-[#4ade80] font-black' : 'text-[#475569]';
+                        let displayScore = 'vs';
+                        if (isPlayed) { displayScore = m.veto && m.veto.format === 'bo1' ? `${m.mapScores[0].s1}-${m.mapScores[0].s2}` : `${m.scoreT1}-${m.scoreT2}`; }
+                        contentHtml = `<div class="flex items-center justify-between py-0.5 sm:py-1 lg:py-[6px] px-1 lg:px-2 bg-slate-900/60 rounded mb-1 lg:mb-1.5 border border-slate-700/50 hover:bg-slate-800 transition-colors relative z-10 group ${isPlayed ? 'cursor-pointer' : 'cursor-default'}" ${isPlayed ? `onclick="toggleTooltip(event, 'viz_${m.id}')"` : ''}><span class="w-8 sm:w-10 lg:w-14 truncate text-right text-[8px] sm:text-[10px] lg:text-[12px] ${w1Class}" title="${m.t1.name}">${(m.t1.tag || m.t1.name.substring(0,3)).toUpperCase()}</span><span class="text-[8px] sm:text-[10px] lg:text-[12px] mx-1 lg:mx-2 tracking-widest ${scoreClass}">${displayScore}</span><span class="w-8 sm:w-10 lg:w-14 truncate text-left text-[8px] sm:text-[10px] lg:text-[12px] ${w2Class}" title="${m.t2.name}">${(m.t2.tag || m.t2.name.substring(0,3)).toUpperCase()}</span>${generateTooltip(m, 'viz_', b.c)}</div>`;
+                        const formatStr = m.veto ? m.veto.format.toUpperCase() : 'BO3';
+                        html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 bg-slate-950/80 backdrop-blur-md flex flex-col ${b.color} relative z-10 overflow-visible shadow-xl" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="flex justify-between items-center px-0.5 sm:px-1 pb-0.5 sm:pb-1 mb-1 lg:mb-2"><span class="text-[7px] sm:text-[9px] lg:text-[11px] font-black uppercase tracking-wider">${b.title}</span><span class="text-[6px] sm:text-[8px] lg:text-[9px] font-bold opacity-60 tracking-wider">${formatStr}</span></div>${contentHtml}</div>`;
+                    } else {
+                        html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 bg-slate-950/80 backdrop-blur-md flex flex-col ${b.color} relative z-10 overflow-visible shadow-xl" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="flex justify-between items-center px-0.5 sm:px-1 pb-0.5 sm:pb-1 mb-1 lg:mb-2"><span class="text-[7px] sm:text-[9px] lg:text-[11px] font-black uppercase tracking-wider">${b.title}</span></div><div class="text-slate-600 text-[10px] text-center py-1 md:py-2 italic font-medium">TBD</div></div>`;
+                    }
+                } else {
+                    let poolTeams = [];
+                    if (b.rank) poolTeams = getRanked(b.rank);
+                    else if (b.matchLossSrc) {
+                        const srcMatch = getPlayinMatch(b.matchLossSrc);
+                        if (srcMatch && srcMatch.winnerId) {
+                            const loser = teams.find(t => t.id === (srcMatch.winnerId === srcMatch.t1.id ? srcMatch.t2.id : srcMatch.t1.id));
+                            if (loser) poolTeams = [loser];
+                        }
+                    }
+
+                    if (poolTeams.length > 0) {
+                        contentHtml = poolTeams.map(t => `<div class="flex items-center justify-center py-0.5 sm:py-1 lg:py-2 bg-slate-900/80 backdrop-blur rounded mb-1 lg:mb-1.5 border border-slate-700/50 relative z-10"><span class="font-bold text-[8px] sm:text-[11px] lg:text-[13px] text-white tracking-wide truncate px-1 sm:px-2" title="${t.name}">${t.name}</span></div>`).join('');
+                    } else {
+                        contentHtml = `<div class="text-slate-600 text-[10px] text-center py-1 md:py-2 italic font-medium">TBD</div>`;
+                    }
+                    html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 flex flex-col ${b.color} relative z-10 backdrop-blur-md" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="text-[7px] sm:text-[9px] lg:text-[10px] font-bold uppercase tracking-widest text-center pb-0.5 sm:pb-1 mb-1 lg:mb-2">${b.label}</div>${contentHtml}</div>`;
+                }
+            });
+            vc.innerHTML = html + `</div>`;
+
+        } else {
+            const connections = [
+                {from: [1,1], to: [2,2], win: true}, {from: [1,3], to: [2,2], win: true},
+                {from: [1,5], to: [2,6], win: true}, {from: [1,7], to: [2,6], win: true},
+                {from: [2,2], to: [3,4], win: true}, {from: [2,6], to: [3,4], win: true},
+                {from: [2,2], to: [3,7], win: false}, {from: [2,6], to: [3,7], win: false}
+            ];
+            
+            let svgLines = `<div class="absolute inset-0 pointer-events-none z-0"><svg class="w-full h-full">`;
+            connections.forEach(c => { 
+                const p1 = getPos(c.from[0], c.from[1], false, 'playoffs');
+                const p2 = getPos(c.to[0], c.to[1], false, 'playoffs'); 
+                svgLines += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="${c.win ? 'flow-line-win' : 'flow-line-loss'}" />`; 
+            });
+            svgLines += `</svg></div>`;
+
+            let html = `<div class="grid gap-x-2 sm:gap-x-5 gap-y-1 sm:gap-y-3 min-w-[750px] sm:min-w-[1000px] h-full min-h-[600px] w-full px-2 relative mx-auto z-10" style="grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(8, 1fr);">` + svgLines;
+
+            let blocks = [
+                { m: playoffMatches.qf[0], title: 'Quarterfinal 1', c: 1, r: 1, color: 'border-yellow-600 shadow-[0_0_12px_rgba(202,138,4,0.3)] bg-[#422006]/40 text-yellow-500' },
+                { m: playoffMatches.qf[1], title: 'Quarterfinal 2', c: 1, r: 3, color: 'border-yellow-600 shadow-[0_0_12px_rgba(202,138,4,0.3)] bg-[#422006]/40 text-yellow-500' },
+                { m: playoffMatches.qf[2], title: 'Quarterfinal 3', c: 1, r: 5, color: 'border-yellow-600 shadow-[0_0_12px_rgba(202,138,4,0.3)] bg-[#422006]/40 text-yellow-500' },
+                { m: playoffMatches.qf[3], title: 'Quarterfinal 4', c: 1, r: 7, color: 'border-yellow-600 shadow-[0_0_12px_rgba(202,138,4,0.3)] bg-[#422006]/40 text-yellow-500' },
+                { m: playoffMatches.sf[0], title: 'Semifinal 1', c: 2, r: 2, color: 'border-orange-500 shadow-[0_0_12px_rgba(249,115,22,0.3)] bg-[#7c2d12]/40 text-orange-400' },
+                { m: playoffMatches.sf[1], title: 'Semifinal 2', c: 2, r: 6, color: 'border-orange-500 shadow-[0_0_12px_rgba(249,115,22,0.3)] bg-[#7c2d12]/40 text-orange-400' },
+                { m: playoffMatches.final, title: 'Grand Final', c: 3, r: 4, color: 'border-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.5)] bg-[#713f12]/50 text-yellow-300' },
+                { m: playoffMatches.third, title: '3rd Place', c: 3, r: 7, color: 'border-slate-500 shadow-[0_0_12px_rgba(100,116,139,0.3)] bg-[#0f172a]/50 text-slate-400' }
+            ];
+
+            blocks.forEach(b => {
+                let contentHtml = '';
+                if (b.m && b.m.t1 && b.m.t2) {
+                    const isPlayed = b.m.winnerId !== null;
+                    const w1Class = b.m.winnerId === b.m.t1.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]');
+                    const w2Class = b.m.winnerId === b.m.t2.id ? 'text-white font-bold' : (isPlayed ? 'text-[#64748b]' : 'text-[#cbd5e1]');
+                    const scoreClass = isPlayed ? 'text-[#4ade80] font-black' : 'text-[#475569]';
+                    let displayScore = 'vs';
+                    if (isPlayed) { displayScore = b.m.veto && b.m.veto.format === 'bo1' ? `${b.m.mapScores[0].s1}-${b.m.mapScores[0].s2}` : `${b.m.scoreT1}-${b.m.scoreT2}`; }
+                    contentHtml = `<div class="flex items-center justify-between py-0.5 sm:py-1 lg:py-[6px] px-1 lg:px-2 bg-slate-900/60 rounded mb-1 lg:mb-1.5 border border-slate-700/50 hover:bg-slate-800 transition-colors relative z-10 group ${isPlayed ? 'cursor-pointer' : 'cursor-default'}" ${isPlayed ? `onclick="toggleTooltip(event, 'viz_${b.m.id}')"` : ''}><span class="w-8 sm:w-10 lg:w-14 truncate text-right text-[8px] sm:text-[10px] lg:text-[12px] ${w1Class}" title="${b.m.t1.name}">${(b.m.t1.tag || b.m.t1.name.substring(0,3)).toUpperCase()}</span><span class="text-[8px] sm:text-[10px] lg:text-[12px] mx-1 lg:mx-2 tracking-widest ${scoreClass}">${displayScore}</span><span class="w-8 sm:w-10 lg:w-14 truncate text-left text-[8px] sm:text-[10px] lg:text-[12px] ${w2Class}" title="${b.m.t2.name}">${(b.m.t2.tag || b.m.t2.name.substring(0,3)).toUpperCase()}</span>${generateTooltip(b.m, 'viz_', b.c)}</div>`;
+                    const formatStr = b.m.veto ? b.m.veto.format.toUpperCase() : 'BO3';
+                    html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 backdrop-blur-md flex flex-col ${b.color} relative z-10 overflow-visible shadow-xl" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="flex justify-between items-center px-0.5 sm:px-1 pb-0.5 sm:pb-1 mb-1 lg:mb-2"><span class="text-[7px] sm:text-[9px] lg:text-[11px] font-black uppercase tracking-wider">${b.title}</span><span class="text-[6px] sm:text-[8px] lg:text-[9px] font-bold opacity-60 tracking-wider">${formatStr}</span></div>${contentHtml}</div>`;
+                } else {
+                    html += `<div class="min-w-[120px] min-h-[60px] border-[1px] sm:border-[2px] rounded-md sm:rounded-lg p-1 sm:p-1.5 lg:p-2 backdrop-blur-md flex flex-col ${b.color} relative z-10 overflow-visible shadow-xl" style="grid-column: ${b.c}; grid-row: ${b.r}; align-self: center;"><div class="flex justify-between items-center px-0.5 sm:px-1 pb-0.5 sm:pb-1 mb-1 lg:mb-2"><span class="text-[7px] sm:text-[9px] lg:text-[11px] font-black uppercase tracking-wider">${b.title}</span></div><div class="text-slate-600 text-[10px] text-center py-1 md:py-2 italic font-medium">TBD</div></div>`;
+                }
+            });
+
+            if (playoffMatches.final && playoffMatches.final.winnerId && playoffMatches.third && playoffMatches.third.winnerId) {
+                const first = teams.find(t => t.id === playoffMatches.final.winnerId);
+                const second = teams.find(t => t.id === (playoffMatches.final.t1.id === playoffMatches.final.winnerId ? playoffMatches.final.t2.id : playoffMatches.final.t1.id));
+                const third = teams.find(t => t.id === playoffMatches.third.winnerId);
+                
+                html += `
+                <div class="flex flex-col justify-end items-center h-full pl-8 ml-4 min-w-[200px] pb-4 z-10" style="grid-column: 4; grid-row: 1 / 9;">
+                    <h3 class="text-lg md:text-xl font-black text-white mb-4 md:mb-6 tracking-widest uppercase shadow-black drop-shadow-lg">Champions</h3>
+                    <div class="flex items-end gap-1 md:gap-2 h-36 md:h-48 mt-auto">
+                        <div class="flex flex-col items-center group podium-step w-16 md:w-20" style="animation-delay: 0.2s">
+                            <span class="text-slate-300 font-bold text-[10px] md:text-xs mb-1 md:mb-2 truncate max-w-[60px] md:max-w-[80px] text-center w-full" title="${second.name}">${second.name}</span>
+                            <div class="w-full bg-gradient-to-t from-slate-500/80 to-slate-300/80 backdrop-blur rounded-t-lg shadow-[0_0_15px_rgba(148,163,184,0.3)] flex items-start justify-center pt-1 md:pt-2 h-20 md:h-24 relative border-t-2 border-slate-200"><span class="text-slate-900 font-black text-xl md:text-2xl">2</span><div class="absolute -top-4 md:-top-5 text-xl md:text-2xl drop-shadow-lg">🥈</div></div>
+                        </div>
+                        <div class="flex flex-col items-center group z-10 podium-step w-20 md:w-24" style="animation-delay: 0.6s">
+                            <span class="text-yellow-400 font-bold text-sm md:text-base mb-1 md:mb-2 drop-shadow-[0_0_8px_rgba(234,179,8,0.8)] truncate max-w-[80px] md:max-w-[100px] text-center w-full" title="${first.name}">${first.name}</span>
+                            <div class="w-full bg-gradient-to-t from-yellow-700/80 to-yellow-400/80 backdrop-blur rounded-t-lg shadow-[0_0_30px_rgba(234,179,8,0.5)] flex items-start justify-center pt-1 md:pt-2 h-28 md:h-36 relative border-t-2 border-yellow-200"><span class="text-yellow-900 font-black text-2xl md:text-3xl">1</span><div class="absolute -top-5 md:-top-6 text-3xl md:text-4xl drop-shadow-lg">🏆</div></div>
+                        </div>
+                        <div class="flex flex-col items-center group podium-step w-16 md:w-20" style="animation-delay: 0.4s">
+                            <span class="text-amber-500 font-bold text-[10px] md:text-xs mb-1 md:mb-2 truncate max-w-[60px] md:max-w-[80px] text-center w-full" title="${third.name}">${third.name}</span>
+                            <div class="w-full bg-gradient-to-t from-amber-800/80 to-amber-600/80 backdrop-blur rounded-t-lg shadow-[0_0_15px_rgba(217,119,6,0.3)] flex items-start justify-center pt-1 md:pt-2 h-12 md:h-16 relative border-t-2 border-amber-400"><span class="text-amber-950 font-black text-xl md:text-2xl">3</span><div class="absolute -top-3 md:-top-4 text-xl md:text-2xl drop-shadow-lg">🥉</div></div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            vc.innerHTML = html + `</div>`;
+        }
+    }
+</script>
+</body>
+</html>

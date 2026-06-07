@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swiss Tournament Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background-color: #030712;
+            background-image: 
+                radial-gradient(circle at 15% 20%, rgba(16, 185, 129, 0.12), transparent 30%),
+                radial-gradient(circle at 85% 60%, rgba(59, 130, 246, 0.12), transparent 30%),
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 30px 30px, 30px 30px;
+            background-attachment: fixed;
+        }
+        .glass-panel { @apply bg-slate-900/80 backdrop-blur-md border border-slate-700/60 shadow-xl; }
+    </style>
+</head>
+<body class="text-slate-100 min-h-screen selection:bg-emerald-500/30 flex flex-col items-center justify-center p-4">
+
+    <div class="text-center mb-12">
+        <h1 class="text-5xl md:text-7xl font-black tracking-tighter text-white uppercase">SWISS TOURNAMENT <span class="text-emerald-500">GENERATOR</span></h1>
+        <p class="text-slate-400 mt-4 tracking-widest uppercase font-bold text-sm">Cloud Sync Enabled</p>
+    </div>
+    
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full">
+        <div class="glass-panel p-6 md:p-8 text-center flex flex-col items-center justify-between gap-4 rounded-2xl shadow-lg relative">
+            <div class="text-4xl cursor-pointer" onclick="createLiveTournament()">📡</div>
+            <div class="w-full">
+                <h3 class="text-lg font-black text-white">Create Live Event</h3>
+                
+                <div class="flex gap-2 w-full mt-3">
+                    <input type="text" id="tourneyNameInput" placeholder="Tournament Name" class="bg-slate-950/50 border border-slate-700 rounded px-3 py-2 w-full text-center font-bold text-emerald-400 uppercase outline-none focus:border-emerald-500 text-xs">
+                    <button onclick="rollRandomTourneyName()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 transition-all text-sm shadow-md" title="Randomize Name">🎲</button>
+                </div>
+                
+                <select id="tourneyFormatInput" onchange="toggleSwingOptions()" class="mt-2 bg-slate-950/50 border border-slate-700 rounded px-3 py-2 w-full text-center font-bold text-blue-400 uppercase outline-none focus:border-blue-500 text-xs">
+                    <option value="standard">Standard Swiss (16 Teams)</option>
+                    <option value="modified">Modified Swiss + League (20 Teams)</option>
+                </select>
+
+                <div id="swingOptions" class="hidden mt-2 flex items-center justify-between bg-slate-900/50 border border-slate-700 rounded px-3 py-1.5">
+                    <span class="text-[10px] uppercase font-bold text-slate-400">Add Swing Teams:</span>
+                    <select id="swingCountInput" class="bg-transparent text-yellow-400 font-bold outline-none text-xs">
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </div>
+
+                <p class="text-[9px] text-slate-500 mt-3 uppercase tracking-wider font-bold">Generates Shareable Access Codes</p>
+            </div>
+            <button onclick="createLiveTournament()" class="bg-emerald-600 hover:bg-emerald-500 text-white w-full py-2.5 rounded font-bold text-sm mt-1 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)]">Host Event</button>
+        </div>
+        
+        <div class="glass-panel p-6 md:p-8 text-center flex flex-col items-center justify-between gap-4 rounded-2xl shadow-lg">
+            <div class="text-4xl">👀</div>
+            <div class="w-full">
+                <h3 class="text-lg font-black text-white">Join Event</h3>
+                <input type="text" id="joinCodeInput" placeholder="Room Code" class="bg-slate-950/50 border border-slate-700 rounded px-3 py-2 w-full text-center font-bold text-blue-400 uppercase outline-none focus:border-blue-500 mt-3">
+            </div>
+            <div class="flex gap-2 w-full mt-2">
+                <button onclick="joinLiveTournament(false)" class="bg-blue-600 hover:bg-blue-500 text-white w-full py-2.5 rounded font-bold text-sm transition-all flex-[2] shadow-md">View</button>
+                <button onclick="joinLiveTournament(true)" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 text-white w-full py-2.5 rounded font-bold text-sm transition-all flex-[1] shadow-md" title="Join as Co-Admin">Admin</button>
+            </div>
+        </div>
+
+        <div class="glass-panel p-6 md:p-8 text-center flex flex-col items-center justify-between gap-4 rounded-2xl cursor-pointer shadow-lg" onclick="document.getElementById('loadInitialInput').click()">
+            <div class="text-4xl">📂</div>
+            <div>
+                <h3 class="text-lg font-black text-white">Load Archive</h3>
+                <p class="text-xs text-slate-400 mt-2">Load a previously saved JSON file to view an offline event.</p>
+            </div>
+            <button class="bg-slate-700 hover:bg-slate-600 border border-slate-600 text-white w-full py-2.5 rounded font-bold text-sm transition-all mt-2 shadow-md">Browse Files</button>
+            <input type="file" id="loadInitialInput" accept=".json" class="hidden" onchange="loadOfflineTournament(event)">
+        </div>
+    </div>
+
+<script>
+    // --- YOUR RESTORED FIREBASE CONFIG ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyDHgel5YFWgl7uJzW14Iu3ameFnkxzize4",
+        authDomain: "dakshh-swiss-trial-f52fa.firebaseapp.com",
+        databaseURL: "https://dakshh-swiss-trial-f52fa-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "dakshh-swiss-trial-f52fa",
+        storageBucket: "dakshh-swiss-trial-f52fa.firebasestorage.app",
+        messagingSenderId: "797986639714",
+        appId: "1:797986639714:web:ee69e0cd6e20efb1d1263b"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    function generateRandomString(len) { return Math.random().toString(36).substring(2, 2+len).toUpperCase(); }
+
+    function rollRandomTourneyName() {
+        const adjectives = ["Radiant", "Neon", "Ascension", "Dakshh", "Ignition", "Vanguard", "Apex", "Quantum", "Nexus", "Celestial", "Cyber", "Phantom"];
+        const nouns = ["Clash", "Gauntlet", "Invitational", "Championship", "Series", "Showdown", "Cup", "Masters", "Brawl", "Classic", "Strike", "League"];
+        document.getElementById('tourneyNameInput').value = adjectives[Math.floor(Math.random() * adjectives.length)] + " " + nouns[Math.floor(Math.random() * nouns.length)];
+    }
+
+    function toggleSwingOptions() {
+        const format = document.getElementById('tourneyFormatInput').value;
+        const swingOpts = document.getElementById('swingOptions');
+        if (format === 'modified') swingOpts.classList.remove('hidden');
+        else swingOpts.classList.add('hidden');
+    }
+
+    document.getElementById("tourneyNameInput").addEventListener("keypress", e => { if (e.key === "Enter") createLiveTournament(); });
+    document.getElementById("joinCodeInput").addEventListener("keypress", e => { if (e.key === "Enter") joinLiveTournament(false); });
+
+    function createLiveTournament() {
+        const roomCode = "VLR-" + generateRandomString(5);
+        const adminKey = generateRandomString(4);
+        const nameInput = document.getElementById('tourneyNameInput').value.trim();
+        const formatInput = document.getElementById('tourneyFormatInput').value;
+        const swingInput = document.getElementById('swingCountInput').value;
+        
+        const tournamentName = nameInput !== "" ? nameInput : "SWISS TOURNAMENT";
+
+        db.ref('tournaments/' + roomCode).set({ 
+            tournamentName, 
+            tournamentFormat: formatInput,
+            swingCount: parseInt(swingInput),
+            phase: 'swiss', teams: [], matches: [], currentRound: 0, 
+            playoffMatches: { qf: [], sf: [], final: null, third: null }, adminKey: adminKey 
+        }).then(() => {
+            localStorage.setItem('dakshh_room', roomCode);
+            localStorage.setItem('dakshh_admin', 'true');
+            localStorage.setItem('dakshh_adminKey', adminKey);
+            window.location.href = "dashboard.html";
+        }).catch(err => alert("Error connecting to database. Check your connection."));
+    }
+
+    function joinLiveTournament(asAdmin) {
+        const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
+        if (!code) return;
+        
+        db.ref('tournaments/' + code).once('value', snapshot => {
+            const data = snapshot.val();
+            if (!data) { alert("Room not found!"); return; }
+            
+            if (asAdmin) {
+                const enteredKey = prompt("Enter the 4-character Admin Key for Room " + code + ":");
+                if (data.adminKey && data.adminKey.toUpperCase() === enteredKey.toUpperCase()) {
+                    localStorage.setItem('dakshh_room', code);
+                    localStorage.setItem('dakshh_admin', 'true');
+                    localStorage.setItem('dakshh_adminKey', data.adminKey);
+                    window.location.href = "dashboard.html";
+                } else { alert("Incorrect Admin Key!"); }
+            } else {
+                localStorage.setItem('dakshh_room', code);
+                localStorage.setItem('dakshh_admin', 'false');
+                window.location.href = "dashboard.html";
+            }
+        });
+    }
+
+    function loadOfflineTournament(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                JSON.parse(e.target.result); 
+                localStorage.setItem('dakshh_offline_data', e.target.result);
+                window.location.href = "dashboard.html";
+            } catch (err) { alert("Invalid JSON file"); }
+        };
+        reader.readAsText(file);
+    }
+</script>
+</body>
+</html>
